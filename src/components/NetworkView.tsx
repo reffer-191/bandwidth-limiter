@@ -1,0 +1,106 @@
+import { useEffect, useState } from "react";
+import { Cable, Wifi, Network, Smartphone, Globe, RefreshCw } from "lucide-react";
+import { api, type Adapter } from "../lib/api";
+import { useEngine } from "../lib/engine";
+import { formatBytes, formatRate } from "../lib/format";
+import { RuleBadges } from "./ActivityView";
+
+export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
+  const { tick, config } = useEngine();
+  const [adapters, setAdapters] = useState<Adapter[]>([]);
+  const units = config?.units ?? "bits";
+
+  const load = () => api.adapters().then(setAdapters).catch(() => {});
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 10000);
+    return () => clearInterval(id);
+  }, []);
+
+  const devices = (tick?.apps ?? []).filter((a) => a.isDevice).sort((a, b) => b.dl + b.ul - (a.dl + a.ul));
+  const sorted = [...adapters].sort((a, b) => Number(b.up) - Number(a.up) || Number(b.is_hotspot) - Number(a.is_hotspot));
+
+  return (
+    <div className="content">
+      <div className="content-scroll">
+        <div className="card">
+          <div className="card-header">
+            <h2>Dispositivos del hotspot</h2>
+            <span className="faint">{devices.length}</span>
+            <div className="spacer" />
+            <span className="muted" style={{ fontSize: 12 }}>
+              ↓ {formatRate(tick?.hotspot.dl ?? 0, units)} · ↑ {formatRate(tick?.hotspot.ul ?? 0, units)}
+            </span>
+          </div>
+          {devices.length === 0 ? (
+            <div className="empty">
+              Ningún dispositivo ha generado tráfico a través de tu hotspot en esta sesión.
+            </div>
+          ) : (
+            <table className="table" style={{ marginTop: 8 }}>
+              <thead>
+                <tr>
+                  <th>Dispositivo</th>
+                  <th className="num">Descarga</th>
+                  <th className="num">Subida</th>
+                  <th className="num">Total</th>
+                  <th className="num">Reglas</th>
+                </tr>
+              </thead>
+              <tbody>
+                {devices.map((d) => (
+                  <tr key={d.key} onClick={() => onSelect(d.key)}>
+                    <td>
+                      <div className="app-cell">
+                        <div className="app-icon"><Smartphone /></div>
+                        <div className="app-name">
+                          <span className="n">{d.name}</span>
+                          <span className="d">{d.description}</span>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="num rate dl">{formatRate(d.dl, units)}</td>
+                    <td className="num rate ul">{formatRate(d.ul, units)}</td>
+                    <td className="num faint">{formatBytes(d.totalDl + d.totalUl)}</td>
+                    <td className="num"><RuleBadges rule={config?.apps[d.key]} units={units} /></td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+        </div>
+
+        <div className="card">
+          <div className="card-header" style={{ paddingBottom: 4 }}>
+            <h2>Adaptadores</h2>
+            <div className="spacer" />
+            <button className="btn ghost icon" onClick={load} title="Actualizar"><RefreshCw /></button>
+          </div>
+          {sorted.map((a) => (
+            <div className="adapter" key={a.if_index}>
+              <div className={`ic ${a.up ? "" : "off"}`}>
+                {a.is_hotspot ? <Wifi /> : a.kind === "wifi" ? <Wifi /> : a.kind === "ethernet" ? <Cable /> : a.kind === "tunnel" || a.kind === "ppp" ? <Globe /> : <Network />}
+              </div>
+              <div className="body">
+                <div className="n">
+                  {a.name}
+                  {a.is_hotspot && <span className="badge green">Hotspot</span>}
+                  {!a.up && <span className="badge">Desconectado</span>}
+                </div>
+                <div className="d">{a.description}</div>
+                {a.addresses.length > 0 && (
+                  <div className="addrs">
+                    {a.addresses.map((ad) => (
+                      <span className="badge mono" key={ad} style={{ fontSize: 10.5 }}>{ad}</span>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          ))}
+          {sorted.length === 0 && <div className="empty">Sin adaptadores</div>}
+        </div>
+      </div>
+    </div>
+  );
+}

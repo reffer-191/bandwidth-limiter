@@ -1,0 +1,8 @@
+node_modules/
+dist/
+dist-portable/
+dist-installer/
+src-tauri/target/
+src-tauri/gen/schemas/
+*.log
+.claude/settings.local.json
