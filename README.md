@@ -2,6 +2,8 @@
 
 **English** · [Español](README.es.md)
 
+[![CI](https://github.com/reffer-191/bandwidth-limiter/actions/workflows/ci.yml/badge.svg)](https://github.com/reffer-191/bandwidth-limiter/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/reffer-191/bandwidth-limiter)](https://github.com/reffer-191/bandwidth-limiter/releases/latest)
+
 A lightweight bandwidth limiter and network traffic monitor for Windows, in the spirit of NetLimiter, with a clean macOS-inspired interface. See which programs are using your connection right now, limit the download/upload speed of any of them, cap your whole PC, and keep the devices connected to your mobile hotspot under the same limit.
 
 ![Activity view](docs/screenshot-activity.png)
@@ -16,22 +18,24 @@ A lightweight bandwidth limiter and network traffic monitor for Windows, in the 
 - **Connections and network** – active connections per application, network adapters, hotspot detection.
 - **System tray** – minimise/close to the tray, toggle the limiter from the tray menu, live speeds in the tooltip.
 - **Start with Windows**, start minimised, light/dark theme, bits or bytes.
+- **Automatic updates** – new releases are offered in-app and installed with one click (signed update feed).
 - Tiny footprint: ~45 MB of RAM and well under 1 % CPU while shaping.
 
 ## Download
 
-| | Installer | Portable |
-|---|---|---|
-| File | `Bandwidth Limiter_<version>_x64-setup.exe` (~210 MB) | `BandwidthLimiter-<version>-portable.zip` (~3 MB) |
-| Needs Internet? | **No.** The WebView2 runtime is embedded and installed only if the PC lacks it. | No, but the PC must already have the WebView2 runtime (built into Windows 11; Windows 10 usually has it through Microsoft Edge). |
-| Install location | `C:\Program Files\Bandwidth Limiter` (all users) | Any folder you like; nothing is installed |
-| Uninstall | *Settings → Apps* – also removes the "start with Windows" task and unloads the driver | Delete the folder |
+| | Installer | Offline installer | Portable |
+|---|---|---|---|
+| File | `Bandwidth.Limiter_<version>_x64-setup.exe` (~5 MB) | `Bandwidth.Limiter_<version>_x64_offline-setup.exe` (~210 MB) | `BandwidthLimiter-<version>-portable.zip` (~4 MB) |
+| WebView2 runtime | Downloaded only if the PC lacks it (built into Windows 11) | Embedded — works with no Internet at all | Must already be present |
+| Install location | `C:\Program Files\Bandwidth Limiter` (all users) | same | Any folder; nothing is installed |
+| Updates | In-app | In-app | Download the new zip |
+| Uninstall | *Settings → Apps* – also removes the "start with Windows" task and unloads the driver | same | Delete the folder |
 
 Grab either one from the [Releases](../../releases) page.
 
 **Requirements:** Windows 10/11, 64-bit. Administrator rights are required every time the app starts (the capture driver demands it); you'll get the usual UAC prompt.
 
-> **Antivirus note.** The app ships `WinDivert.dll` and `WinDivert64.sys`, the open-source packet capture driver (LGPL) used by many networking tools. Some antivirus products flag *any* network driver they don't know as suspicious. The files are unmodified copies of the official [WinDivert 2.2.2](https://github.com/basil00/WinDivert/releases) release.
+> **SmartScreen and antivirus.** The executable and the installers are code-signed, but with a certificate the project issued itself (a certificate from a public authority is not free). Windows may therefore show *"Windows protected your PC"* on first run: click **More info → Run anyway**. You can verify the signature in the file's *Properties → Digital Signatures* tab (signer "Bandwidth Limiter, reffer-191"). The app also ships `WinDivert.dll` and `WinDivert64.sys`, the open-source packet capture driver (LGPL) used by many networking tools; they are unmodified copies of the official [WinDivert 2.2.2](https://github.com/basil00/WinDivert/releases) release and keep Microsoft's driver signature.
 
 ## Using it
 
@@ -53,6 +57,9 @@ Click an application to open its detail panel: current speed, 30-day totals, PID
 - **Click** to pin an instant: the table below switches to the speeds of that moment, sorted by usage, with a blue banner and a *Back to live* button. Click the chart again (or the button) to return.
 - **Mouse wheel** zooms around the cursor (up to ×60) without changing the selected history range; **Shift + wheel** pans; **double-click** resets. A pinned point stays pinned while you zoom.
 - The range selector (1–60 min) and the series selector (All / Internet / Local / Hotspot) are in the card header.
+
+### Updates
+The app checks the project's releases a few seconds after starting (switch it off in *Settings → Updates*) and shows a banner when a newer version exists; *Settings → Updates → Check now* does it on demand. Updates are downloaded from GitHub, verified against the project's signing key and installed by the signed installer, after which the app restarts. The portable edition does not self-update: download the new zip.
 
 ### Tray and startup
 - The **minimise** button hides the window to the tray (configurable). Left-click the tray icon to bring it back; right-click for *Show*, *Limiter active* and *Quit*.
@@ -103,6 +110,8 @@ npm run tauri build        # release build + NSIS installer (downloads the WebVi
 python scripts/portable.py # portable zip from the release build
 ```
 
+Releases are built by GitHub Actions: pushing a tag `vX.Y.Z` compiles, signs and publishes the installer, the offline installer, the portable zip and the updater feed (`latest.json`), using the `CHANGELOG.md` entry as release notes. The repository secrets hold the code-signing certificate (`WINDOWS_CERT_PFX_B64`, `WINDOWS_CERT_PASSWORD`) and the updater key (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
+
 Handy while developing:
 
 - `npm run dev` and open http://localhost:1420 in a browser: the UI runs against a simulated backend (`src/lib/mock.ts`), no driver or admin rights needed. Add `#rules` or `#settings` to the URL to open a specific view.
@@ -116,6 +125,8 @@ Handy while developing:
 **Some traffic shows as "Unknown".** The first packets of a brand-new connection can arrive before Windows reports which process owns it. The amount is usually tiny.
 
 **Limits look ~5 % lower than configured.** Limits are enforced on the wire, including TCP/IP headers, while download managers report payload only.
+
+**Why is the certificate self-signed?** Certificates trusted by Windows cost money every year. Projects that want to remove the SmartScreen warning can apply to [SignPath Foundation](https://signpath.org/) (free signing for open-source projects) or buy an OV/EV certificate; the build already supports any certificate through `scripts/sign.ps1`.
 
 **Does it limit my hotspot clients?** Yes: traffic forwarded to devices connected to the Windows mobile hotspot is captured too, appears as a device row, and is subject to the hotspot limit and the global limit.
 

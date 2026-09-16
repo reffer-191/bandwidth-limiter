@@ -2,6 +2,8 @@
 
 [English](README.md) · **Español**
 
+[![CI](https://github.com/reffer-191/bandwidth-limiter/actions/workflows/ci.yml/badge.svg)](https://github.com/reffer-191/bandwidth-limiter/actions/workflows/ci.yml) [![Release](https://img.shields.io/github/v/release/reffer-191/bandwidth-limiter)](https://github.com/reffer-191/bandwidth-limiter/releases/latest)
+
 Limitador de ancho de banda y monitor de tráfico para Windows, ligero y al estilo de NetLimiter, con una interfaz limpia inspirada en macOS. Mira qué programas están usando tu conexión ahora mismo, limita la velocidad de bajada/subida de cualquiera de ellos, pon un techo a todo el equipo y mantén bajo ese mismo límite a los dispositivos conectados a tu hotspot.
 
 ![Vista de actividad](docs/screenshot-activity.png)
@@ -16,22 +18,24 @@ Limitador de ancho de banda y monitor de tráfico para Windows, ligero y al esti
 - **Conexiones y red**: conexiones activas por aplicación, adaptadores de red, detección del hotspot.
 - **Bandeja del sistema**: minimizar/cerrar a la bandeja, activar o pausar el limitador desde su menú, velocidades en el tooltip.
 - **Iniciar con Windows**, arranque minimizado, tema claro/oscuro, bits o bytes.
+- **Actualizaciones automáticas**: las nuevas versiones se ofrecen dentro de la app y se instalan con un clic (fuente de actualizaciones firmada).
 - Consumo mínimo: ~45 MB de RAM y muy por debajo del 1 % de CPU mientras limita.
 
 ## Descarga
 
-| | Instalador | Portable |
-|---|---|---|
-| Fichero | `Bandwidth Limiter_<versión>_x64-setup.exe` (~210 MB) | `BandwidthLimiter-<versión>-portable.zip` (~3 MB) |
-| ¿Necesita Internet? | **No.** Lleva embebido el runtime WebView2 y solo lo instala si el PC no lo tiene. | No, pero el PC debe tener ya el runtime WebView2 (incluido en Windows 11; en Windows 10 suele venir con Microsoft Edge). |
-| Dónde se instala | `C:\Program Files\Bandwidth Limiter` (todos los usuarios) | En la carpeta que quieras; no instala nada |
-| Desinstalar | *Configuración → Aplicaciones*: elimina también la tarea de "iniciar con Windows" y descarga el driver | Borra la carpeta |
+| | Instalador | Instalador offline | Portable |
+|---|---|---|---|
+| Fichero | `Bandwidth.Limiter_<versión>_x64-setup.exe` (~5 MB) | `Bandwidth.Limiter_<versión>_x64_offline-setup.exe` (~210 MB) | `BandwidthLimiter-<versión>-portable.zip` (~4 MB) |
+| Runtime WebView2 | Se descarga solo si el PC no lo tiene (Windows 11 lo incluye) | Embebido: funciona sin ninguna conexión | Debe estar ya instalado |
+| Dónde se instala | `C:\Program Files\Bandwidth Limiter` (todos los usuarios) | igual | En la carpeta que quieras; no instala nada |
+| Actualizaciones | Desde la app | Desde la app | Descargar el nuevo zip |
+| Desinstalar | *Configuración → Aplicaciones*: elimina también la tarea de "iniciar con Windows" y descarga el driver | igual | Borra la carpeta |
 
 Descarga cualquiera de los dos desde la página de [Releases](../../releases).
 
 **Requisitos:** Windows 10/11 de 64 bits. La app pide permisos de administrador cada vez que arranca (el driver de captura lo exige); verás el aviso habitual de UAC.
 
-> **Nota sobre antivirus.** La app incluye `WinDivert.dll` y `WinDivert64.sys`, el driver de captura de paquetes de código abierto (LGPL) que usan muchas herramientas de red. Algunos antivirus marcan como sospechoso *cualquier* driver de red que no conozcan. Los ficheros son copias sin modificar de la versión oficial [WinDivert 2.2.2](https://github.com/basil00/WinDivert/releases).
+> **SmartScreen y antivirus.** El ejecutable y los instaladores van firmados, pero con un certificado emitido por el propio proyecto (uno de una autoridad pública no es gratuito). Por eso Windows puede mostrar *"Windows protegió su PC"* la primera vez: pulsa **Más información → Ejecutar de todas formas**. Puedes comprobar la firma en *Propiedades → Firmas digitales* del fichero (firmante "Bandwidth Limiter, reffer-191"). La app incluye además `WinDivert.dll` y `WinDivert64.sys`, el driver de captura de paquetes de código abierto (LGPL) que usan muchas herramientas de red; son copias sin modificar de la versión oficial [WinDivert 2.2.2](https://github.com/basil00/WinDivert/releases) y conservan la firma de Microsoft del driver.
 
 ## Cómo se usa
 
@@ -53,6 +57,9 @@ Haz clic en una aplicación para abrir su panel de detalle: velocidad actual, to
 - **Clic** para fijar un instante: la tabla pasa a mostrar las velocidades de ese momento, ordenadas por consumo, con una banda azul y el botón *Volver al directo*. Otro clic en la gráfica (o el botón) vuelve al directo.
 - **Rueda del ratón** para ampliar alrededor del cursor (hasta ×60) sin cambiar el rango de historial elegido; **Shift + rueda** desplaza; **doble clic** restablece. Un punto fijado sigue fijado mientras haces zoom.
 - El selector de rango (1–60 min) y el de serie (Todo / Internet / Local / Hotspot) están en la cabecera de la tarjeta.
+
+### Actualizaciones
+La app consulta las releases del proyecto unos segundos después de arrancar (se desactiva en *Ajustes → Actualizaciones*) y muestra un aviso cuando hay una versión nueva; *Ajustes → Actualizaciones → Buscar ahora* lo hace bajo demanda. Las actualizaciones se descargan de GitHub, se verifican con la clave de firma del proyecto y las instala el instalador firmado; después la app se reinicia. La versión portable no se actualiza sola: descarga el nuevo zip.
 
 ### Bandeja e inicio
 - El botón **minimizar** oculta la ventana en la bandeja (configurable). Clic izquierdo en el icono para recuperarla; clic derecho para *Mostrar*, *Limitador activo* y *Salir*.
@@ -103,6 +110,8 @@ npm run tauri build        # build release + instalador NSIS (descarga una vez e
 python scripts/portable.py # zip portable a partir de la build release
 ```
 
+Las releases las genera GitHub Actions: al subir una etiqueta `vX.Y.Z` compila, firma y publica el instalador, el instalador offline, el zip portable y la fuente de actualizaciones (`latest.json`), usando la entrada de `CHANGELOG.md` como notas de la versión. Los secretos del repositorio guardan el certificado de firma (`WINDOWS_CERT_PFX_B64`, `WINDOWS_CERT_PASSWORD`) y la clave del updater (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
+
 Útil durante el desarrollo:
 
 - `npm run dev` y abre http://localhost:1420 en un navegador: la UI funciona contra un backend simulado (`src/lib/mock.ts`), sin driver ni permisos de administrador. Añade `#rules` o `#settings` a la URL para abrir una vista concreta.
@@ -116,6 +125,8 @@ python scripts/portable.py # zip portable a partir de la build release
 **Parte del tráfico aparece como "Desconocido".** Los primeros paquetes de una conexión nueva pueden llegar antes de que Windows informe de qué proceso es su dueño. Suele ser una cantidad mínima.
 
 **Los límites parecen un ~5 % más bajos de lo configurado.** Se aplican a nivel de paquete, cabeceras TCP/IP incluidas, mientras que los gestores de descargas cuentan solo los datos útiles.
+
+**¿Por qué el certificado es autofirmado?** Los certificados que Windows reconoce cuestan dinero cada año. Para quitar el aviso de SmartScreen se puede solicitar la firma gratuita de [SignPath Foundation](https://signpath.org/) (para proyectos de código abierto) o comprar un certificado OV/EV; la build ya admite cualquier certificado a través de `scripts/sign.ps1`.
 
 **¿Limita a los dispositivos de mi hotspot?** Sí: el tráfico reenviado a los dispositivos conectados al punto de acceso móvil de Windows también se captura, aparece como una fila de dispositivo y está sujeto al límite del hotspot y al límite global.
 

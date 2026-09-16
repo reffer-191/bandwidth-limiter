@@ -606,6 +606,11 @@ input[type="number"]::-webkit-inner-spin-button {
   border: 1px solid rgba(255, 69, 58, 0.25);
   font-size: 12.5px;
 }
+.banner.info {
+  background: var(--accent-soft);
+  border-color: rgba(10, 132, 255, 0.35);
+  align-items: center;
+}
 .banner.warn {
   background: rgba(255, 214, 10, 0.14);
   border-color: rgba(255, 190, 10, 0.35);

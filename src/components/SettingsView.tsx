@@ -1,11 +1,31 @@
 import { useEffect, useState } from "react";
-import { api } from "../lib/api";
+import { api, type UpdateInfo } from "../lib/api";
 import { useEngine } from "../lib/engine";
 import { Segmented, Switch } from "./ui";
+
+const APP_VERSION = __APP_VERSION__;
 
 export function SettingsView() {
   const { config, updateConfig, status } = useEngine();
   const [autostart, setAutostart] = useState<boolean | null>(null);
+  const [updateState, setUpdateState] = useState<{ status: "idle" | "checking" | "none" | "available" | "installing" | "error"; info?: UpdateInfo; error?: string }>({ status: "idle" });
+  const checkNow = async () => {
+    setUpdateState({ status: "checking" });
+    try {
+      const info = await api.checkUpdate();
+      setUpdateState(info ? { status: "available", info } : { status: "none" });
+    } catch (e) {
+      setUpdateState({ status: "error", error: String(e) });
+    }
+  };
+  const installNow = async () => {
+    setUpdateState((s) => ({ ...s, status: "installing" }));
+    try {
+      await api.installUpdate();
+    } catch (e) {
+      setUpdateState({ status: "error", error: String(e) });
+    }
+  };
   const [autostartError, setAutostartError] = useState<string | null>(null);
   useEffect(() => {
     api.autostart().then(setAutostart).catch(() => setAutostart(false));
@@ -89,6 +109,35 @@ export function SettingsView() {
           </div>
         </div>
 
+        <div className="section-title">Actualizaciones</div>
+        <div className="card">
+          <div className="settings-row">
+            <div className="l">
+              <span className="t">Buscar actualizaciones al iniciar</span>
+              <span className="s">Consulta las versiones publicadas en GitHub unos segundos después de arrancar</span>
+            </div>
+            <Switch on={config.checkUpdates} onChange={(checkUpdates) => updateConfig((c) => ({ ...c, checkUpdates }))} />
+          </div>
+          <div className="settings-row">
+            <div className="l">
+              <span className="t">Versión instalada: {APP_VERSION}</span>
+              <span className="s">
+                {updateState.status === "idle" && "Las actualizaciones se descargan firmadas desde las releases del proyecto"}
+                {updateState.status === "checking" && "Comprobando…"}
+                {updateState.status === "none" && "Tienes la última versión"}
+                {updateState.status === "available" && `Disponible la versión ${updateState.info?.version}`}
+                {updateState.status === "installing" && "Descargando e instalando… la aplicación se reiniciará"}
+                {updateState.status === "error" && <span style={{ color: "var(--red)" }}>{updateState.error}</span>}
+              </span>
+            </div>
+            {updateState.status === "available" ? (
+              <button className="btn primary" onClick={installNow}>Instalar y reiniciar</button>
+            ) : (
+              <button className="btn" onClick={checkNow} disabled={updateState.status === "checking" || updateState.status === "installing"}>Buscar ahora</button>
+            )}
+          </div>
+        </div>
+
         <div className="section-title">Bandeja del sistema</div>
         <div className="card">
           <div className="settings-row">
@@ -147,7 +196,7 @@ export function SettingsView() {
         <div className="card">
           <div className="settings-row">
             <div className="l">
-              <span className="t">Bandwidth Limiter 0.4.0</span>
+              <span className="t">Bandwidth Limiter {APP_VERSION}</span>
               <span className="s">Limitador de ancho de banda y monitor de tráfico para Windows. Construido con Tauri, Rust y WinDivert (LGPL).</span>
             </div>
           </div>

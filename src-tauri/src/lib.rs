@@ -6,6 +6,7 @@ mod config;
 mod elevate;
 mod engine;
 mod tray;
+mod update;
 mod windivert;
 
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
@@ -28,6 +29,7 @@ pub fn run() {
         tray::show_main(app);
     }));
     builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
             let engine = engine::Engine::start(app.handle().clone());
@@ -79,6 +81,9 @@ pub fn run() {
                 (cfg.start_minimized, cfg.minimize_to_tray, cfg.master)
             };
             tray::setup(app.handle(), master)?;
+            if app.state::<engine::Engine>().state.config.read().check_updates {
+                update::check_on_startup(app.handle().clone());
+            }
             if autostart::launched_by_task() || start_minimized {
                 if minimize_to_tray {
                     let _ = win.hide();
@@ -116,6 +121,8 @@ pub fn run() {
             commands::set_autostart,
             commands::minimize_window,
             commands::show_window,
+            commands::check_update,
+            commands::install_update,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

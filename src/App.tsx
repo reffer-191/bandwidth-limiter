@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Activity, SlidersHorizontal, Network, Settings, Search, AlertTriangle, ShieldAlert } from "lucide-react";
+import { Activity, SlidersHorizontal, Network, Settings, Search, AlertTriangle, ShieldAlert, Download } from "lucide-react";
 import { useEngine } from "./lib/engine";
-import { ruleActive } from "./lib/api";
+import { api, onEvent, ruleActive, type UpdateInfo } from "./lib/api";
 import { formatRate } from "./lib/format";
 import { WindowControls, Switch, useWindowChrome, useStoredWidth, ResizeHandle } from "./components/ui";
 import { ActivityView } from "./components/ActivityView";
@@ -29,6 +29,14 @@ export default function App() {
   const [selected, setSelected] = useState<string | null>(null);
   const { focused, maximized } = useWindowChrome();
   const [sidebarWidth, setSidebarWidth] = useStoredWidth("sidebar", 218, 160, 380);
+  const [update, setUpdate] = useState<UpdateInfo | null>(null);
+  const [installing, setInstalling] = useState(false);
+  useEffect(() => {
+    const p = onEvent<UpdateInfo>("update-available", setUpdate);
+    return () => {
+      p.then((f) => f());
+    };
+  }, []);
 
   // Theme: config override, else OS preference.
   useEffect(() => {
@@ -101,6 +109,21 @@ export default function App() {
           <WindowControls maximized={maximized} />
         </header>
 
+        {update && (
+          <div style={{ padding: "12px 18px 0" }}>
+            <div className="banner info">
+              <Download />
+              <div style={{ flex: 1 }}>
+                <b>Nueva versión {update.version} disponible</b> (tienes la {update.current}).
+                {update.notes && <span className="muted"> {update.notes.split("\n")[0].slice(0, 160)}</span>}
+              </div>
+              <button className="btn primary" disabled={installing} onClick={async () => { setInstalling(true); try { await api.installUpdate(); } catch { setInstalling(false); } }}>
+                {installing ? "Instalando…" : "Instalar y reiniciar"}
+              </button>
+              <button className="btn ghost" onClick={() => setUpdate(null)}>Más tarde</button>
+            </div>
+          </div>
+        )}
         {(error || (status && !status.driverOk)) && (
           <div style={{ padding: "12px 18px 0" }}>
             <div className={`banner ${status && !status.elevated ? "" : "warn"}`}>

@@ -69,6 +69,16 @@ pub fn set_autostart(enabled: bool) -> Result<bool, String> {
 }
 
 #[tauri::command]
+pub async fn check_update(app: tauri::AppHandle) -> Result<Option<crate::update::UpdateInfo>, String> {
+    crate::update::check(&app).await
+}
+
+#[tauri::command]
+pub async fn install_update(app: tauri::AppHandle) -> Result<(), String> {
+    crate::update::install(&app).await
+}
+
+#[tauri::command]
 pub fn show_window(app: tauri::AppHandle) {
     crate::tray::show_main(&app);
 }

@@ -8,7 +8,13 @@ out = os.path.join(root, "dist-portable", name)
 shutil.rmtree(out, ignore_errors=True)
 os.makedirs(out)
 exe = next(f for f in ["bandwidth-limiter.exe", "Bandwidth Limiter.exe"] if os.path.exists(os.path.join(rel, f)))
-shutil.copy2(os.path.join(rel, exe), os.path.join(out, "BandwidthLimiter.exe"))
+target_exe = os.path.join(out, "BandwidthLimiter.exe")
+shutil.copy2(os.path.join(rel, exe), target_exe)
+# `tauri build` restores the unsigned binary after bundling, so sign our copy.
+import subprocess
+sign = subprocess.run(["powershell", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File",
+                       os.path.join(root, "scripts", "sign.ps1"), target_exe], capture_output=True, text=True)
+print("signed" if sign.returncode == 0 else "WARNING: signing failed: " + sign.stdout + sign.stderr)
 for f in ["WinDivert.dll", "WinDivert64.sys"]:
     shutil.copy2(os.path.join(rel, f), out)
 shutil.copy2(os.path.join(root, "src-tauri", "windivert", "LICENSE"), os.path.join(out, "WinDivert-LICENSE.txt"))

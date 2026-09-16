@@ -55,6 +55,7 @@ pub struct Config {
     pub start_minimized: bool,
     pub minimize_to_tray: bool,
     pub close_to_tray: bool,
+    pub check_updates: bool,
 }
 
 impl Default for Config {
@@ -71,6 +72,7 @@ impl Default for Config {
             start_minimized: false,
             minimize_to_tray: true,
             close_to_tray: false,
+            check_updates: true,
         }
     }
 }

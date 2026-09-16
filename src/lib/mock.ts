@@ -36,6 +36,7 @@ const state = {
     startMinimized: false,
     minimizeToTray: true,
     closeToTray: false,
+    checkUpdates: true,
   } as Config,
   history: [] as Sample[],
   totals: new Map<number, { dl: number; ul: number }>(),
@@ -119,6 +120,8 @@ export const mockApi = {
   autostart: async () => state.autostart,
   setAutostart: async (enabled: boolean) => (state.autostart = enabled),
   minimizeWindow: async () => {},
+  checkUpdate: async () => ({ version: "9.9.9", current: "0.5.0", notes: "Versión de prueba del mock", date: null }),
+  installUpdate: async () => {},
   onTick: (l: Listener) => {
     state.listeners.add(l);
     return () => state.listeners.delete(l);

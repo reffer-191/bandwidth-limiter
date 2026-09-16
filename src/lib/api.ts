@@ -72,6 +72,7 @@ export interface Config {
   startMinimized: boolean;
   minimizeToTray: boolean;
   closeToTray: boolean;
+  checkUpdates: boolean;
 }
 
 export interface Status {
@@ -93,6 +94,13 @@ export interface Adapter {
   up: boolean;
   is_hotspot: boolean;
   addresses: string[];
+}
+
+export interface UpdateInfo {
+  version: string;
+  current: string;
+  notes: string | null;
+  date: string | null;
 }
 
 export interface FlowView {
@@ -126,6 +134,8 @@ const tauriApi = {
   autostart: () => invoke<boolean>("get_autostart"),
   setAutostart: (enabled: boolean) => invoke<boolean>("set_autostart", { enabled }),
   minimizeWindow: () => invoke<void>("minimize_window"),
+  checkUpdate: () => invoke<UpdateInfo | null>("check_update"),
+  installUpdate: () => invoke<void>("install_update"),
 };
 
 /** Outside Tauri (plain `vite` in a browser) fall back to the in-memory mock. */
@@ -135,6 +145,12 @@ export async function onConfig(cb: (c: Config) => void): Promise<() => void> {
   if (!isTauri) return () => {};
   const { listen } = await import("@tauri-apps/api/event");
   return listen<Config>("config", (e) => cb(e.payload));
+}
+
+export async function onEvent<T>(name: string, cb: (payload: T) => void): Promise<() => void> {
+  if (!isTauri) return () => {};
+  const { listen } = await import("@tauri-apps/api/event");
+  return listen<T>(name, (e) => cb(e.payload));
 }
 
 export async function onTick(cb: (t: Tick) => void): Promise<() => void> {
