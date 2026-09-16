@@ -2,24 +2,41 @@ import { useEffect, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Box, Smartphone, HelpCircle } from "lucide-react";
 import { useAppIcon } from "../lib/engine";
-import { api, isTauri } from "../lib/api";
+import { api, isTauri, type AppRate } from "../lib/api";
+import { useT, type T } from "../lib/i18n";
+
+/** Display name for an app row; engine pseudo-apps are localized here. */
+export function appName(a: Pick<AppRate, "key" | "name">, t: T): string {
+  return a.key === "unknown" ? t("app.unknown") : a.name;
+}
+
+export function appDescription(a: Pick<AppRate, "key" | "description" | "isDevice">, t: T): string {
+  if (a.key === "unknown") return t("app.unknown.desc");
+  if (a.key === "system") return t("app.system.desc");
+  if (a.isDevice) return t("app.device.desc");
+  return a.description;
+}
 
 export function Switch({
   on,
   onChange,
   small,
   disabled,
+  label,
 }: {
   on: boolean;
   onChange: (v: boolean) => void;
   small?: boolean;
   disabled?: boolean;
+  /** Accessible name for screen readers. */
+  label?: string;
 }) {
   return (
     <button
       type="button"
       role="switch"
       aria-checked={on}
+      aria-label={label}
       disabled={disabled}
       className={`switch ${on ? "on" : ""} ${small ? "small" : ""}`}
       onClick={() => onChange(!on)}
@@ -83,20 +100,21 @@ export function AppIcon({
 
 /** Classic Windows caption buttons (minimize / maximize-restore / close). */
 export function WindowControls({ maximized }: { maximized: boolean }) {
+  const t = useT();
   const win = isTauri ? getCurrentWindow() : null;
   return (
     <div className="win-controls">
-      <button className="wc" onClick={() => (isTauri ? api.minimizeWindow() : undefined)} title="Minimizar" aria-label="Minimizar">
+      <button className="wc" onClick={() => (isTauri ? api.minimizeWindow() : undefined)} title={t("win.minimize")} aria-label={t("win.minimize")}>
         <svg viewBox="0 0 10 10"><path d="M0 5h10" /></svg>
       </button>
-      <button className="wc" onClick={() => win?.toggleMaximize()} title={maximized ? "Restaurar" : "Maximizar"} aria-label="Maximizar">
+      <button className="wc" onClick={() => win?.toggleMaximize()} title={maximized ? t("win.restore") : t("win.maximize")} aria-label={maximized ? t("win.restore") : t("win.maximize")}>
         {maximized ? (
           <svg viewBox="0 0 10 10"><path d="M2 0.5h7.5v7.5H2z M0.5 2v7.5H8" /></svg>
         ) : (
           <svg viewBox="0 0 10 10"><path d="M0.5 0.5h9v9h-9z" /></svg>
         )}
       </button>
-      <button className="wc close" onClick={() => win?.close()} title="Cerrar" aria-label="Cerrar">
+      <button className="wc close" onClick={() => win?.close()} title={t("win.close")} aria-label={t("win.close")}>
         <svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" /></svg>
       </button>
     </div>

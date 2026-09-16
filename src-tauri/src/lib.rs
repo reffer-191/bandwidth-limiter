@@ -5,6 +5,7 @@ mod commands;
 mod config;
 mod elevate;
 mod engine;
+mod i18n;
 mod tray;
 mod update;
 mod windivert;
@@ -75,12 +76,12 @@ pub fn run() {
             let _ = win.show();
             // Start minimized when the user asked for it or when the logon task
             // launched us (nobody wants a window popping up at login).
-            let (start_minimized, minimize_to_tray, master) = {
+            let (start_minimized, minimize_to_tray, master, lang) = {
                 let engine = app.state::<engine::Engine>();
                 let cfg = engine.state.config.read();
-                (cfg.start_minimized, cfg.minimize_to_tray, cfg.master)
+                (cfg.start_minimized, cfg.minimize_to_tray, cfg.master, cfg.lang())
             };
-            tray::setup(app.handle(), master)?;
+            tray::setup(app.handle(), master, lang)?;
             if app.state::<engine::Engine>().state.config.read().check_updates {
                 update::check_on_startup(app.handle().clone());
             }

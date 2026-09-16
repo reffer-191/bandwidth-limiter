@@ -27,7 +27,8 @@ struct Progress {
 /// Checks the release feed. `Ok(None)` means we are up to date.
 pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
     let updater = app.updater().map_err(|e| e.to_string())?;
-    let update = updater.check().await.map_err(|e| friendly(e.to_string()))?;
+    let lang = lang_of(app);
+    let update = updater.check().await.map_err(|e| friendly(e.to_string(), lang))?;
     Ok(update.map(|u| UpdateInfo {
         version: u.version.clone(),
         current: u.current_version.clone(),
@@ -40,8 +41,9 @@ pub async fn check(app: &AppHandle) -> Result<Option<UpdateInfo>, String> {
 /// signed NSIS installer in passive mode and exits the application.
 pub async fn install(app: &AppHandle) -> Result<(), String> {
     let updater = app.updater().map_err(|e| e.to_string())?;
-    let Some(update) = updater.check().await.map_err(|e| friendly(e.to_string()))? else {
-        return Err("No hay ninguna actualización pendiente".into());
+    let lang = lang_of(app);
+    let Some(update) = updater.check().await.map_err(|e| friendly(e.to_string(), lang))? else {
+        return Err(crate::i18n::tr(lang, "upd.none").into());
     };
     // Release the capture driver first so the installer can replace the files.
     if let Some(engine) = app.try_state::<Engine>() {
@@ -58,7 +60,7 @@ pub async fn install(app: &AppHandle) -> Result<(), String> {
             || {},
         )
         .await
-        .map_err(|e| friendly(e.to_string()))?;
+        .map_err(|e| friendly(e.to_string(), lang))?;
     Ok(())
 }
 
@@ -78,11 +80,16 @@ async fn tokio_sleep(secs: u64) {
         .ok();
 }
 
-fn friendly(e: String) -> String {
+fn lang_of(app: &AppHandle) -> crate::i18n::Lang {
+    app.try_state::<Engine>().map(|e| e.state.config.read().lang()).unwrap_or(crate::i18n::Lang::En)
+}
+
+fn friendly(e: String, lang: crate::i18n::Lang) -> String {
+    use crate::i18n::tr;
     if e.contains("Could not fetch a valid release JSON") || e.contains("404") {
-        "No se pudo leer la lista de versiones (¿sin conexión?)".into()
+        tr(lang, "upd.fetch").into()
     } else if e.contains("signature") {
-        "La firma de la actualización no es válida".into()
+        tr(lang, "upd.signature").into()
     } else {
         e
     }

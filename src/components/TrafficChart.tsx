@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { AppRate, Rate, Sample } from "../lib/api";
 import { axisLabel, formatRate, formatTime, niceMax, type Units } from "../lib/format";
+import { useT } from "../lib/i18n";
 
 export type Series = "total" | "internet" | "local" | "hotspot";
 
@@ -35,6 +36,7 @@ const TOOLTIP_W = 210;
 const TOOLTIP_GAP = 44;
 
 export function TrafficChart({ history, minutes, units, series, appsById, onPin, pinnedTs }: Props) {
+  const t = useT();
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const wrapRef = useRef<HTMLDivElement>(null);
   const [hover, setHover] = useState<Hover | null>(null);
@@ -103,9 +105,9 @@ export function TrafficChart({ history, minutes, units, series, appsById, onPin,
     canvas.height = size.h * dpr;
     const ctx = canvas.getContext("2d")!;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    draw(ctx, size.w, size.h, visible.slots, (i) => (full.end - (visible.start + i * 1000)) / 1000, pick, yMax, units, hover, dark());
+    draw(ctx, size.w, size.h, visible.slots, (i) => (full.end - (visible.start + i * 1000)) / 1000, pick, yMax, units, hover, dark(), t("chart.now"));
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [size, visible, yMax, units, hover, series]);
+  }, [size, visible, yMax, units, hover, series, t]);
 
   const plotW = size.w - PAD.left - PAD.right;
   const xOf = (index: number) => PAD.left + (index / Math.max(1, visible.n - 1)) * plotW;
@@ -211,8 +213,8 @@ export function TrafficChart({ history, minutes, units, series, appsById, onPin,
       {zoomed && (
         <div className="chart-zoom">
           <span>×{view.zoom >= 10 ? view.zoom.toFixed(0) : view.zoom.toFixed(1)}</span>
-          <button className="btn ghost" onClick={() => setView({ zoom: 1, endTs: null })} title="Doble clic en la gráfica también restablece">
-            Restablecer
+          <button className="btn ghost" onClick={() => setView({ zoom: 1, endTs: null })} title={t("chart.resetHint")}>
+            {t("chart.reset")}
           </button>
         </div>
       )}
@@ -220,7 +222,7 @@ export function TrafficChart({ history, minutes, units, series, appsById, onPin,
         <div className={`chart-tooltip ${compact ? "compact" : ""}`} style={{ left: tooltipLeft, top: 6 }}>
           <div className="t">
             <span>{formatTime(visible.start + hover.index * 1000)}</span>
-            {hover.pinned && <span>fijado</span>}
+            {hover.pinned && <span>{t("chart.pinned")}</span>}
           </div>
           {hovered ? (
             <>
@@ -234,21 +236,21 @@ export function TrafficChart({ history, minutes, units, series, appsById, onPin,
                     const a = appsById.get(id);
                     return (
                       <div className="app" key={id}>
-                        <span className="n">{a?.name ?? `#${id}`}</span>
+                        <span className="n">{a ? (a.key === "unknown" ? t("app.unknown") : a.name) : `#${id}`}</span>
                         <span className="dl">{formatRate(r.dl, units)}</span>
                         <span className="ul">{formatRate(r.ul, units)}</span>
                       </div>
                     );
                   })}
-                  {compact && hovered.top.length > 3 && <div className="faint">+{hovered.top.length - 3} más al fijar</div>}
+                  {compact && hovered.top.length > 3 && <div className="faint">{t("chart.moreWhenPinned", { n: hovered.top.length - 3 })}</div>}
                 </div>
               ) : (
-                <div className="faint">Sin tráfico</div>
+                <div className="faint">{t("chart.noTraffic")}</div>
               )}
-              {!hover.pinned && <div className="pin">Clic para fijar · rueda para ampliar</div>}
+              {!hover.pinned && <div className="pin">{t("chart.clickToPin")}</div>}
             </>
           ) : (
-            <div className="faint">Sin datos</div>
+            <div className="faint">{t("chart.noData")}</div>
           )}
         </div>
       )}
@@ -264,9 +266,9 @@ function dark() {
   return document.documentElement.getAttribute("data-theme") === "dark";
 }
 
-function agoLabel(secs: number): string {
+function agoLabel(secs: number, now: string): string {
   const s = Math.round(secs);
-  if (s <= 0) return "ahora";
+  if (s <= 0) return now;
   if (s < 60) return `-${s}s`;
   const m = Math.floor(s / 60);
   const r = s % 60;
@@ -284,6 +286,7 @@ function draw(
   units: Units,
   hover: Hover | null,
   isDark: boolean,
+  nowLabel: string,
 ) {
   ctx.clearRect(0, 0, w, h);
   const plotW = w - PAD.left - PAD.right;
@@ -319,7 +322,7 @@ function draw(
   const ticks = 6;
   for (let t = 0; t <= ticks; t++) {
     const i = Math.round((t / ticks) * (n - 1));
-    ctx.fillText(agoLabel(secsAgoOf(i)), x(i), PAD.top + plotH + 6);
+    ctx.fillText(agoLabel(secsAgoOf(i), nowLabel), x(i), PAD.top + plotH + 6);
   }
 
   const drawSeries = (key: "dl" | "ul", color: string, fillA: string, fillB: string) => {

@@ -17,7 +17,8 @@ A lightweight bandwidth limiter and network traffic monitor for Windows, in the 
 - **Stable application list** – sorted by name or by accumulated 30-day usage, never by the live speed, so rows don't jump around while you click. Applications that used the network in the last 30 days stay in the list even when they are closed.
 - **Connections and network** – active connections per application, network adapters, hotspot detection.
 - **System tray** – minimise/close to the tray, toggle the limiter from the tray menu, live speeds in the tooltip.
-- **Start with Windows**, start minimised, light/dark theme, bits or bytes.
+- **Start with Windows**, start minimised, light/dark theme, bits or bytes, **English and Spanish** interface (follows the Windows language).
+- **Keyboard friendly** – Ctrl+F search, Ctrl+1…4 views, ↑/↓ + Enter in the list, Esc to close.
 - **Automatic updates** – new releases are offered in-app and installed with one click (signed update feed).
 - Tiny footprint: ~45 MB of RAM and well under 1 % CPU while shaping.
 
@@ -57,6 +58,16 @@ Click an application to open its detail panel: current speed, 30-day totals, PID
 - **Click** to pin an instant: the table below switches to the speeds of that moment, sorted by usage, with a blue banner and a *Back to live* button. Click the chart again (or the button) to return.
 - **Mouse wheel** zooms around the cursor (up to ×60) without changing the selected history range; **Shift + wheel** pans; **double-click** resets. A pinned point stays pinned while you zoom.
 - The range selector (1–60 min) and the series selector (All / Internet / Local / Hotspot) are in the card header.
+
+### Keyboard shortcuts
+| Keys | Action |
+|---|---|
+| Ctrl+F | Focus the search box |
+| Ctrl+1 / 2 / 3 / 4 | Activity / Rules / Network / Settings |
+| ↑ ↓ | Move through the application list |
+| Enter | Open / close the detail panel of the focused row |
+| Esc | Close the detail panel, clear the search |
+| Mouse wheel / Shift+wheel / double-click on the chart | Zoom / pan / reset |
 
 ### Updates
 The app checks the project's releases a few seconds after starting (switch it off in *Settings → Updates*) and shows a banner when a newer version exists; *Settings → Updates → Check now* does it on demand. Updates are downloaded from GitHub, verified against the project's signing key and installed by the signed installer, after which the app restarts. The portable edition does not self-update: download the new zip.

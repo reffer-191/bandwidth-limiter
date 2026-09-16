@@ -202,7 +202,7 @@ impl Engine {
                 Some(w)
             }
             Err(e) => {
-                status.driver_error = Some(format!("No se pudo cargar WinDivert.dll: {e}"));
+                status.driver_error = Some(format!("{}: {e}", crate::i18n::tr(config.lang(), "err.dll")));
                 None
             }
         };
@@ -255,6 +255,7 @@ impl Engine {
 
     fn open_capture(&self, w: &'static WinDivert) {
         let s = &self.state;
+        let lang = s.config.read().lang();
         // Main network layer: everything except loopback.
         match w.open("!loopback", wd::LAYER_NETWORK, 0, 0) {
             Ok(h) => {
@@ -268,7 +269,7 @@ impl Engine {
                 thread::Builder::new().name("bwl-net".into()).spawn(move || recv_loop(st, hv as Handle, false)).unwrap();
             }
             Err(e) => {
-                s.status.lock().driver_error = Some(wd::explain_open_error(&e));
+                s.status.lock().driver_error = Some(wd::explain_open_error(&e, lang));
                 return;
             }
         }
@@ -284,7 +285,7 @@ impl Engine {
                 let hv = h as usize;
                 thread::Builder::new().name("bwl-fwd".into()).spawn(move || recv_loop(st, hv as Handle, true)).unwrap();
             }
-            Err(e) => s.status.lock().forward_error = Some(wd::explain_open_error(&e)),
+            Err(e) => s.status.lock().forward_error = Some(wd::explain_open_error(&e, lang)),
         }
         // Flow + socket events for process attribution.
         for (layer, name, slot) in [(wd::LAYER_FLOW, "bwl-flow", 2), (wd::LAYER_SOCKET, "bwl-sock", 3)] {
@@ -295,7 +296,7 @@ impl Engine {
                     let hv = h as usize;
                     thread::Builder::new().name(name.into()).spawn(move || event_loop(st, hv as Handle, layer)).unwrap();
                 }
-                Err(e) => log::warn!("{name}: {}", wd::explain_open_error(&e)),
+                Err(e) => log::warn!("{name}: {}", wd::explain_open_error(&e, lang)),
             }
         }
     }
@@ -328,9 +329,9 @@ impl Engine {
         cfg.sanitize();
         self.apply_config(&cfg);
         *self.state.config.write() = cfg.clone();
-        cfg.save().map_err(|e| format!("No se pudo guardar la configuración: {e}"))?;
+        cfg.save().map_err(|e| format!("{}: {e}", crate::i18n::tr(cfg.lang(), "cfg.save")))?;
         // Keep every other surface (tray menu, UI) in sync.
-        crate::tray::sync(&self.app, cfg.master);
+        crate::tray::sync(&self.app, cfg.master, cfg.lang());
         let _ = self.app.emit("config", &cfg);
         Ok(cfg)
     }
@@ -531,6 +532,7 @@ fn scheduler_loop(state: Arc<State>) {
 fn ticker_loop(state: Arc<State>, app: AppHandle) {
     let mut last = Instant::now();
     let mut n: u64 = 0;
+    let mut last_limiting = false;
     while state.running.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(1000));
         n += 1;
@@ -571,10 +573,18 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
         let tick = build_tick(&state, &sample, &per_app);
         *state.latest.lock() = Some(tick.clone());
         let _ = app.emit("tick", &tick);
+        if tick.limiting != last_limiting {
+            last_limiting = tick.limiting;
+            crate::tray::set_active(&app, tick.limiting);
+        }
         if n % 2 == 0 {
-            let units = state.config.read().units.clone();
+            let (units, lang) = {
+                let c = state.config.read();
+                (c.units.clone(), c.lang())
+            };
+            let suffix = if tick.limiting { format!(" ({})", crate::i18n::tr(lang, "tray.limiting")) } else { String::new() };
             crate::tray::set_tooltip(&app, &format!(
-                "Bandwidth Limiter\n\u{2193} {}   \u{2191} {}",
+                "Bandwidth Limiter{suffix}\n\u{2193} {}   \u{2191} {}",
                 fmt_rate(tick.total.dl, &units),
                 fmt_rate(tick.total.ul, &units)
             ));

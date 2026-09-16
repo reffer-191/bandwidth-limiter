@@ -56,6 +56,9 @@ pub struct Config {
     pub minimize_to_tray: bool,
     pub close_to_tray: bool,
     pub check_updates: bool,
+    /// "system" | "es" | "en"
+    pub language: String,
+    pub onboarding_done: bool,
 }
 
 impl Default for Config {
@@ -73,11 +76,17 @@ impl Default for Config {
             minimize_to_tray: true,
             close_to_tray: false,
             check_updates: true,
+            language: "system".into(),
+            onboarding_done: false,
         }
     }
 }
 
 impl Config {
+    pub fn lang(&self) -> crate::i18n::Lang {
+        crate::i18n::resolve(&self.language)
+    }
+
     /// Portable mode: a file named `portable` next to the executable keeps the
     /// configuration in that same folder instead of %APPDATA%.
     pub fn portable_dir() -> Option<PathBuf> {
@@ -121,6 +130,9 @@ impl Config {
         }
         if !matches!(self.theme.as_str(), "light" | "dark") {
             self.theme = "system".into();
+        }
+        if !matches!(self.language.as_str(), "es" | "en") {
+            self.language = "system".into();
         }
         self.apps.retain(|_, r| r.rule.is_active());
         // A limit of 0 B/s would be a block in disguise; treat it as 1 Mbit/s.

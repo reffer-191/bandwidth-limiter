@@ -3,9 +3,12 @@ import { Cable, Wifi, Network, Smartphone, Globe, RefreshCw } from "lucide-react
 import { api, type Adapter } from "../lib/api";
 import { useEngine } from "../lib/engine";
 import { formatBytes, formatRate } from "../lib/format";
+import { useT } from "../lib/i18n";
 import { RuleBadges } from "./ActivityView";
+import { appDescription } from "./ui";
 
 export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
+  const t = useT();
   const { tick, config } = useEngine();
   const [adapters, setAdapters] = useState<Adapter[]>([]);
   const units = config?.units ?? "bits";
@@ -25,7 +28,7 @@ export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
       <div className="content-scroll">
         <div className="card">
           <div className="card-header">
-            <h2>Dispositivos del hotspot</h2>
+            <h2>{t("net.devices")}</h2>
             <span className="faint">{devices.length}</span>
             <div className="spacer" />
             <span className="muted" style={{ fontSize: 12 }}>
@@ -33,29 +36,27 @@ export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
             </span>
           </div>
           {devices.length === 0 ? (
-            <div className="empty">
-              Ningún dispositivo ha generado tráfico a través de tu hotspot en esta sesión.
-            </div>
+            <div className="empty">{t("net.noDevices")}</div>
           ) : (
             <table className="table" style={{ marginTop: 8 }}>
               <thead>
                 <tr>
-                  <th>Dispositivo</th>
-                  <th className="num">Descarga</th>
-                  <th className="num">Subida</th>
-                  <th className="num">Total</th>
-                  <th className="num">Reglas</th>
+                  <th>{t("net.device")}</th>
+                  <th className="num">{t("download")}</th>
+                  <th className="num">{t("upload")}</th>
+                  <th className="num">{t("net.total")}</th>
+                  <th className="num">{t("col.rules")}</th>
                 </tr>
               </thead>
               <tbody>
                 {devices.map((d) => (
-                  <tr key={d.key} onClick={() => onSelect(d.key)}>
+                  <tr key={d.key} tabIndex={0} onClick={() => onSelect(d.key)} onKeyDown={(e) => e.key === "Enter" && onSelect(d.key)}>
                     <td>
                       <div className="app-cell">
                         <div className="app-icon"><Smartphone /></div>
                         <div className="app-name">
                           <span className="n">{d.name}</span>
-                          <span className="d">{d.description}</span>
+                          <span className="d">{appDescription(d, t)}</span>
                         </div>
                       </div>
                     </td>
@@ -72,9 +73,9 @@ export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
 
         <div className="card">
           <div className="card-header" style={{ paddingBottom: 4 }}>
-            <h2>Adaptadores</h2>
+            <h2>{t("net.adapters")}</h2>
             <div className="spacer" />
-            <button className="btn ghost icon" onClick={load} title="Actualizar"><RefreshCw /></button>
+            <button className="btn ghost icon" onClick={load} title={t("net.refresh")} aria-label={t("net.refresh")}><RefreshCw /></button>
           </div>
           {sorted.map((a) => (
             <div className="adapter" key={a.if_index}>
@@ -84,8 +85,8 @@ export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
               <div className="body">
                 <div className="n">
                   {a.name}
-                  {a.is_hotspot && <span className="badge green">Hotspot</span>}
-                  {!a.up && <span className="badge">Desconectado</span>}
+                  {a.is_hotspot && <span className="badge green">{t("hotspot")}</span>}
+                  {!a.up && <span className="badge">{t("net.disconnected")}</span>}
                 </div>
                 <div className="d">{a.description}</div>
                 {a.addresses.length > 0 && (
@@ -98,7 +99,7 @@ export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
               </div>
             </div>
           ))}
-          {sorted.length === 0 && <div className="empty">Sin adaptadores</div>}
+          {sorted.length === 0 && <div className="empty">{t("net.noAdapters")}</div>}
         </div>
       </div>
     </div>

@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-09-16
+
+### Added
+- English interface (in addition to Spanish); follows the Windows language by default, selectable in *Settings → Appearance*. Tray menu and engine messages are localized too.
+- Keyboard: Ctrl+F focuses the search, Ctrl+1…4 switch views, ↑/↓ move through the application list, Enter opens/closes the detail panel, Esc closes it. Visible focus rings and accessible names on switches and buttons.
+- First-run introduction (three steps, explains the UAC prompt); can be replayed from *Settings → About*.
+- Per-application chart of the selected app in the detail panel.
+- Tray icon shows a green badge while limits are being applied; the tooltip says so.
+- *About* section with a link to the project and the list of third-party licenses.
+
+### Changed
+- The detail panel slides in; the tooltip of the chart uses the interface language.
+
 ## [0.5.0] - 2026-09-16
 
 ### Added
@@ -33,7 +46,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 - First working version: live per-process traffic, per-app / global / hotspot limits and blocking, history chart with per-app breakdown, connections and adapters views, light/dark theme.
 
-[Unreleased]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.5.0...HEAD
+[Unreleased]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.6.0...HEAD
+[0.6.0]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.4.0...v0.5.0
 [0.4.0]: https://github.com/reffer-191/bandwidth-limiter/releases/tag/v0.4.0
 [0.1.0]: https://github.com/reffer-191/bandwidth-limiter/releases/tag/v0.4.0

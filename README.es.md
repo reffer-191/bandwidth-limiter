@@ -17,7 +17,8 @@ Limitador de ancho de banda y monitor de tráfico para Windows, ligero y al esti
 - **Lista de aplicaciones estable**: ordenada por nombre o por consumo acumulado de 30 días, nunca por la velocidad instantánea, para que las filas no bailen mientras haces clic. Las aplicaciones que han usado la red en los últimos 30 días siguen en la lista aunque estén cerradas.
 - **Conexiones y red**: conexiones activas por aplicación, adaptadores de red, detección del hotspot.
 - **Bandeja del sistema**: minimizar/cerrar a la bandeja, activar o pausar el limitador desde su menú, velocidades en el tooltip.
-- **Iniciar con Windows**, arranque minimizado, tema claro/oscuro, bits o bytes.
+- **Iniciar con Windows**, arranque minimizado, tema claro/oscuro, bits o bytes, interfaz en **español e inglés** (sigue el idioma de Windows).
+- **Cómoda con el teclado**: Ctrl+F busca, Ctrl+1…4 cambia de vista, ↑/↓ + Enter en la lista, Esc cierra.
 - **Actualizaciones automáticas**: las nuevas versiones se ofrecen dentro de la app y se instalan con un clic (fuente de actualizaciones firmada).
 - Consumo mínimo: ~45 MB de RAM y muy por debajo del 1 % de CPU mientras limita.
 
@@ -57,6 +58,16 @@ Haz clic en una aplicación para abrir su panel de detalle: velocidad actual, to
 - **Clic** para fijar un instante: la tabla pasa a mostrar las velocidades de ese momento, ordenadas por consumo, con una banda azul y el botón *Volver al directo*. Otro clic en la gráfica (o el botón) vuelve al directo.
 - **Rueda del ratón** para ampliar alrededor del cursor (hasta ×60) sin cambiar el rango de historial elegido; **Shift + rueda** desplaza; **doble clic** restablece. Un punto fijado sigue fijado mientras haces zoom.
 - El selector de rango (1–60 min) y el de serie (Todo / Internet / Local / Hotspot) están en la cabecera de la tarjeta.
+
+### Atajos de teclado
+| Teclas | Acción |
+|---|---|
+| Ctrl+F | Ir al buscador |
+| Ctrl+1 / 2 / 3 / 4 | Actividad / Reglas / Red / Ajustes |
+| ↑ ↓ | Moverse por la lista de aplicaciones |
+| Enter | Abrir / cerrar el panel de detalle de la fila enfocada |
+| Esc | Cerrar el panel de detalle, vaciar el buscador |
+| Rueda / Shift+rueda / doble clic en la gráfica | Ampliar / desplazar / restablecer |
 
 ### Actualizaciones
 La app consulta las releases del proyecto unos segundos después de arrancar (se desactiva en *Ajustes → Actualizaciones*) y muestra un aviso cuando hay una versión nueva; *Ajustes → Actualizaciones → Buscar ahora* lo hace bajo demanda. Las actualizaciones se descargan de GitHub, se verifican con la clave de firma del proyecto y las instala el instalador firmado; después la app se reinicia. La versión portable no se actualiza sola: descarga el nuevo zip.

@@ -37,6 +37,8 @@ const state = {
     minimizeToTray: true,
     closeToTray: false,
     checkUpdates: true,
+    language: "system",
+    onboardingDone: !location.hash.includes("onboarding"),
   } as Config,
   history: [] as Sample[],
   totals: new Map<number, { dl: number; ul: number }>(),

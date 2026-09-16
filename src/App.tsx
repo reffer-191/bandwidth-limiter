@@ -1,29 +1,45 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { Activity, SlidersHorizontal, Network, Settings, Search, AlertTriangle, ShieldAlert, Download } from "lucide-react";
 import { useEngine } from "./lib/engine";
 import { api, onEvent, ruleActive, type UpdateInfo } from "./lib/api";
 import { formatRate } from "./lib/format";
+import { I18nProvider, resolveLang, useT, type Key } from "./lib/i18n";
 import { WindowControls, Switch, useWindowChrome, useStoredWidth, ResizeHandle } from "./components/ui";
 import { ActivityView } from "./components/ActivityView";
 import { RulesView } from "./components/RulesView";
 import { NetworkView } from "./components/NetworkView";
 import { SettingsView } from "./components/SettingsView";
+import { Onboarding } from "./components/Onboarding";
 
 type View = "activity" | "rules" | "network" | "settings";
 
-const TITLES: Record<View, string> = {
-  activity: "Actividad",
-  rules: "Reglas",
-  network: "Red",
-  settings: "Ajustes",
+const TITLE_KEYS: Record<View, Key> = {
+  activity: "nav.activity",
+  rules: "nav.rules",
+  network: "nav.network",
+  settings: "nav.settings",
 };
 
 export default function App() {
+  const { config } = useEngine();
+  const lang = resolveLang(config?.language);
+  useEffect(() => {
+    document.documentElement.lang = lang;
+  }, [lang]);
+  return (
+    <I18nProvider lang={lang}>
+      <Shell />
+    </I18nProvider>
+  );
+}
+
+function Shell() {
+  const t = useT();
   const { config, status, tick, updateConfig, error } = useEngine();
   // "#rules" etc. selects the initial view (handy for screenshots/docs).
   const [view, setView] = useState<View>(() => {
     const h = location.hash.replace("#", "");
-    return h in TITLES ? (h as View) : "activity";
+    return h in TITLE_KEYS ? (h as View) : "activity";
   });
   const [filter, setFilter] = useState("");
   const [selected, setSelected] = useState<string | null>(null);
@@ -31,6 +47,8 @@ export default function App() {
   const [sidebarWidth, setSidebarWidth] = useStoredWidth("sidebar", 218, 160, 380);
   const [update, setUpdate] = useState<UpdateInfo | null>(null);
   const [installing, setInstalling] = useState(false);
+  const searchRef = useRef<HTMLInputElement>(null);
+
   useEffect(() => {
     const p = onEvent<UpdateInfo>("update-available", setUpdate);
     return () => {
@@ -42,14 +60,37 @@ export default function App() {
   useEffect(() => {
     const mq = window.matchMedia("(prefers-color-scheme: dark)");
     const apply = () => {
-      const t = config?.theme ?? "system";
-      const dark = t === "dark" || (t === "system" && mq.matches);
+      const th = config?.theme ?? "system";
+      const dark = th === "dark" || (th === "system" && mq.matches);
       document.documentElement.setAttribute("data-theme", dark ? "dark" : "light");
     };
     apply();
     mq.addEventListener("change", apply);
     return () => mq.removeEventListener("change", apply);
   }, [config?.theme]);
+
+  // Global shortcuts: Ctrl+F focuses the search, Ctrl+1..4 switch views,
+  // Escape clears the search / closes the detail panel.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      const inField = (e.target as HTMLElement)?.tagName === "INPUT" || (e.target as HTMLElement)?.tagName === "SELECT";
+      if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "f") {
+        e.preventDefault();
+        setView("activity");
+        setTimeout(() => searchRef.current?.focus(), 0);
+      } else if ((e.ctrlKey || e.metaKey) && ["1", "2", "3", "4"].includes(e.key)) {
+        e.preventDefault();
+        setView((["activity", "rules", "network", "settings"] as View[])[Number(e.key) - 1]);
+      } else if (e.key === "Escape" && !inField) {
+        setSelected(null);
+      } else if (e.key === "Escape" && inField && (e.target as HTMLInputElement) === searchRef.current) {
+        setFilter("");
+        searchRef.current?.blur();
+      }
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, []);
 
   const ruleCount = useMemo(() => {
     if (!config) return 0;
@@ -61,6 +102,8 @@ export default function App() {
     setView("activity");
   };
 
+  const units = config?.units ?? "bits";
+
   return (
     <div className={`window ${focused ? "" : "blurred"} ${maximized ? "maximized" : ""}`}>
       <aside className="sidebar" style={{ width: sidebarWidth }} data-tauri-drag-region>
@@ -69,28 +112,28 @@ export default function App() {
           <img src="/logo.png" alt="" draggable={false} data-tauri-drag-region />
           <span data-tauri-drag-region>Bandwidth Limiter</span>
         </div>
-        <nav className="nav">
-          <NavItem icon={<Activity />} label="Actividad" active={view === "activity"} onClick={() => setView("activity")} />
-          <NavItem icon={<SlidersHorizontal />} label="Reglas" active={view === "rules"} onClick={() => setView("rules")} count={ruleCount || undefined} />
-          <NavItem icon={<Network />} label="Red" active={view === "network"} onClick={() => setView("network")} />
-          <NavItem icon={<Settings />} label="Ajustes" active={view === "settings"} onClick={() => setView("settings")} />
+        <nav className="nav" aria-label="Main">
+          <NavItem icon={<Activity />} label={t("nav.activity")} hint="Ctrl+1" active={view === "activity"} onClick={() => setView("activity")} />
+          <NavItem icon={<SlidersHorizontal />} label={t("nav.rules")} hint="Ctrl+2" active={view === "rules"} onClick={() => setView("rules")} count={ruleCount || undefined} />
+          <NavItem icon={<Network />} label={t("nav.network")} hint="Ctrl+3" active={view === "network"} onClick={() => setView("network")} />
+          <NavItem icon={<Settings />} label={t("nav.settings")} hint="Ctrl+4" active={view === "settings"} onClick={() => setView("settings")} />
         </nav>
         <div className="sidebar-footer">
           <div className="master-row">
             <div>
-              <div className="label">Limitador</div>
-              <div className="sub">{config?.master ? (tick?.limiting ? "Aplicando reglas" : "Sin reglas activas") : "En pausa"}</div>
+              <div className="label">{t("limiter")}</div>
+              <div className="sub">{config?.master ? (tick?.limiting ? t("limiter.active") : t("limiter.noRules")) : t("limiter.paused")}</div>
             </div>
-            <Switch on={config?.master ?? false} onChange={(v) => updateConfig((c) => ({ ...c, master: v }))} disabled={!config} />
+            <Switch label={t("limiter")} on={config?.master ?? false} onChange={(v) => updateConfig((c) => ({ ...c, master: v }))} disabled={!config} />
           </div>
           <div className="status-line">
             <span className={`dot ${status ? (status.driverOk ? "ok" : "bad") : ""}`} />
-            {status ? (status.driverOk ? "Driver activo" : "Driver inactivo") : "Conectando…"}
+            {status ? (status.driverOk ? t("driver.active") : t("driver.inactive")) : t("connecting")}
           </div>
           {tick && (
             <div className="status-line num">
-              <span style={{ color: "var(--dl)" }}>↓ {formatRate(tick.total.dl, config?.units ?? "bits")}</span>
-              <span style={{ color: "var(--ul)" }}>↑ {formatRate(tick.total.ul, config?.units ?? "bits")}</span>
+              <span style={{ color: "var(--dl)" }}>↓ {formatRate(tick.total.dl, units)}</span>
+              <span style={{ color: "var(--ul)" }}>↑ {formatRate(tick.total.ul, units)}</span>
             </div>
           )}
         </div>
@@ -98,12 +141,12 @@ export default function App() {
 
       <main className="main">
         <header className="titlebar" data-tauri-drag-region>
-          <h1 data-tauri-drag-region>{TITLES[view]}</h1>
+          <h1 data-tauri-drag-region>{t(TITLE_KEYS[view])}</h1>
           <div className="spacer" data-tauri-drag-region />
           {view === "activity" && (
-            <label className="search">
+            <label className="search" title={t("search.hint")}>
               <Search />
-              <input placeholder="Buscar aplicación" value={filter} onChange={(e) => setFilter(e.target.value)} />
+              <input ref={searchRef} placeholder={t("search.placeholder")} aria-label={t("search.placeholder")} value={filter} onChange={(e) => setFilter(e.target.value)} />
             </label>
           )}
           <WindowControls maximized={maximized} />
@@ -114,13 +157,13 @@ export default function App() {
             <div className="banner info">
               <Download />
               <div style={{ flex: 1 }}>
-                <b>Nueva versión {update.version} disponible</b> (tienes la {update.current}).
+                <b>{t("update.available", { version: update.version })}</b> {t("update.current", { current: update.current })}
                 {update.notes && <span className="muted"> {update.notes.split("\n")[0].slice(0, 160)}</span>}
               </div>
               <button className="btn primary" disabled={installing} onClick={async () => { setInstalling(true); try { await api.installUpdate(); } catch { setInstalling(false); } }}>
-                {installing ? "Instalando…" : "Instalar y reiniciar"}
+                {installing ? t("update.installing") : t("update.install")}
               </button>
-              <button className="btn ghost" onClick={() => setUpdate(null)}>Más tarde</button>
+              <button className="btn ghost" onClick={() => setUpdate(null)}>{t("update.later")}</button>
             </div>
           </div>
         )}
@@ -129,8 +172,8 @@ export default function App() {
             <div className={`banner ${status && !status.elevated ? "" : "warn"}`}>
               {status && !status.elevated ? <ShieldAlert /> : <AlertTriangle />}
               <div>
-                <b>{status && !status.elevated ? "Se necesitan permisos de administrador. " : "El motor de captura no está activo. "}</b>
-                {status?.driverError ?? error ?? "Reinicia la aplicación como administrador para poder monitorizar y limitar el tráfico."}
+                <b>{status && !status.elevated ? t("banner.admin") : t("banner.engine")} </b>
+                {status?.driverError ?? error ?? t("banner.restart")}
               </div>
             </div>
           </div>
@@ -141,13 +184,15 @@ export default function App() {
         {view === "network" && <NetworkView onSelect={goToApp} />}
         {view === "settings" && <SettingsView />}
       </main>
+
+      {config && !config.onboardingDone && <Onboarding onDone={() => updateConfig((c) => ({ ...c, onboardingDone: true }))} />}
     </div>
   );
 }
 
-function NavItem({ icon, label, active, onClick, count }: { icon: React.ReactNode; label: string; active: boolean; onClick: () => void; count?: number }) {
+function NavItem({ icon, label, hint, active, onClick, count }: { icon: React.ReactNode; label: string; hint?: string; active: boolean; onClick: () => void; count?: number }) {
   return (
-    <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick}>
+    <button className={`nav-item ${active ? "active" : ""}`} onClick={onClick} title={hint} aria-current={active ? "page" : undefined}>
       {icon}
       {label}
       {count !== undefined && <span className="count">{count}</span>}

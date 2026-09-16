@@ -214,15 +214,16 @@ impl WinDivert {
 }
 
 /// Human readable explanation for the common `WinDivertOpen` failures.
-pub fn explain_open_error(e: &io::Error) -> String {
+pub fn explain_open_error(e: &io::Error, lang: crate::i18n::Lang) -> String {
+    use crate::i18n::tr;
     match e.raw_os_error() {
-        Some(2) => "No se encontró WinDivert64.sys junto a WinDivert.dll".into(),
-        Some(5) => "Acceso denegado: la aplicación debe ejecutarse como administrador".into(),
-        Some(87) => "Filtro de WinDivert inválido".into(),
-        Some(577) => "Windows rechazó la firma del driver WinDivert64.sys".into(),
-        Some(654) => "Versión incompatible del driver WinDivert (¿otra app usa una versión distinta?)".into(),
-        Some(1275) => "El driver fue bloqueado por el sistema (política de drivers)".into(),
-        Some(1753) => "El servicio Base Filtering Engine (BFE) no está en ejecución".into(),
-        _ => format!("Error {}: {}", e.raw_os_error().unwrap_or(0), e),
+        Some(2) => tr(lang, "err.sys").into(),
+        Some(5) => tr(lang, "err.denied").into(),
+        Some(87) => tr(lang, "err.filter").into(),
+        Some(577) => tr(lang, "err.signature").into(),
+        Some(654) => tr(lang, "err.version").into(),
+        Some(1275) => tr(lang, "err.blocked").into(),
+        Some(1753) => tr(lang, "err.bfe").into(),
+        _ => format!("{} {}: {}", tr(lang, "err.unknown"), e.raw_os_error().unwrap_or(0), e),
     }
 }

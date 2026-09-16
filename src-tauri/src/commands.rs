@@ -64,8 +64,9 @@ pub fn get_autostart() -> bool {
 }
 
 #[tauri::command]
-pub fn set_autostart(enabled: bool) -> Result<bool, String> {
-    crate::autostart::set_enabled(enabled)
+pub fn set_autostart(engine: State<'_, Engine>, enabled: bool) -> Result<bool, String> {
+    let lang = engine.state.config.read().lang();
+    crate::autostart::set_enabled(enabled, lang)
 }
 
 #[tauri::command]

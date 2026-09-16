@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { Limit, Rule } from "../lib/api";
 import { unitOptions, type Units } from "../lib/format";
+import { useT } from "../lib/i18n";
 import { Switch } from "./ui";
 
 /** Number input that keeps its own text while the user types. */
@@ -92,31 +93,32 @@ export function RuleEditor({
   onChange: (r: Rule) => void;
   showBlock?: boolean;
 }) {
+  const t = useT();
   return (
     <div className="rule-editor">
       <div className="rule-row">
-        <Switch on={rule.dl.enabled} onChange={(v) => onChange({ ...rule, dl: enable(rule.dl, v, DEFAULT_DL) })} />
+        <Switch label={t("download")} on={rule.dl.enabled} onChange={(v) => onChange({ ...rule, dl: enable(rule.dl, v, DEFAULT_DL) })} />
         <span className="name dl">
-          <ArrowDown /> Descarga
+          <ArrowDown /> {t("download")}
         </span>
         <RateField limit={rule.dl} units={units} onChange={(dl) => onChange({ ...rule, dl })} />
       </div>
       <div className="rule-row">
-        <Switch on={rule.ul.enabled} onChange={(v) => onChange({ ...rule, ul: enable(rule.ul, v, DEFAULT_UL) })} />
+        <Switch label={t("upload")} on={rule.ul.enabled} onChange={(v) => onChange({ ...rule, ul: enable(rule.ul, v, DEFAULT_UL) })} />
         <span className="name ul">
-          <ArrowUp /> Subida
+          <ArrowUp /> {t("upload")}
         </span>
         <RateField limit={rule.ul} units={units} onChange={(ul) => onChange({ ...rule, ul })} />
       </div>
       {showBlock && (
         <div className="rule-block">
-          <span>Bloquear</span>
+          <span>{t("rule.block")}</span>
           <div className="opts">
             <label>
-              <Switch small on={rule.blockDl} onChange={(v) => onChange({ ...rule, blockDl: v })} /> entrada
+              <Switch small on={rule.blockDl} onChange={(v) => onChange({ ...rule, blockDl: v })} /> {t("rule.in")}
             </label>
             <label>
-              <Switch small on={rule.blockUl} onChange={(v) => onChange({ ...rule, blockUl: v })} /> salida
+              <Switch small on={rule.blockUl} onChange={(v) => onChange({ ...rule, blockUl: v })} /> {t("rule.out")}
             </label>
           </div>
         </div>

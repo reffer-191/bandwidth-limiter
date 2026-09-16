@@ -2,10 +2,12 @@ import { Laptop, Wifi, Trash2 } from "lucide-react";
 import { ruleActive, type Rule } from "../lib/api";
 import { useEngine } from "../lib/engine";
 import type { Units } from "../lib/format";
+import { useT } from "../lib/i18n";
 import { RuleEditor } from "./RuleEditor";
-import { AppIcon, Switch } from "./ui";
+import { AppIcon, Switch, appDescription, appName } from "./ui";
 
 export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
+  const t = useT();
   const { config, updateConfig, tick, status } = useEngine();
   if (!config) return null;
   const units: Units = config.units;
@@ -17,7 +19,7 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
   return (
     <div className="content">
       <div className="content-scroll">
-        <div className="section-title">Límites generales</div>
+        <div className="section-title">{t("rules.general")}</div>
 
         <div className="card rule-card">
           <div className="who">
@@ -25,15 +27,11 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
               <Laptop />
             </div>
             <div className="titles">
-              <div className="n">Todo el equipo</div>
-              <div className="d">
-                Techo para la suma de todo el tráfico, incluido el que reenvías a los dispositivos del hotspot. Ninguna app ni dispositivo podrá superarlo.
-              </div>
+              <div className="n">{t("rules.pc")}</div>
+              <div className="d">{t("rules.pc.desc")}</div>
               <div className="actions" style={{ alignItems: "center", gap: 8 }}>
                 <Switch small on={config.globalInternetOnly} onChange={(v) => updateConfig((c) => ({ ...c, globalInternetOnly: v }))} />
-                <span className="muted" style={{ fontSize: 12 }}>
-                  Solo tráfico de Internet (no contar la red local)
-                </span>
+                <span className="muted" style={{ fontSize: 12 }}>{t("rules.internetOnly")}</span>
               </div>
             </div>
           </div>
@@ -46,13 +44,11 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
               <Wifi />
             </div>
             <div className="titles">
-              <div className="n">Hotspot / red compartida</div>
-              <div className="d">
-                Límite propio para el conjunto de dispositivos conectados a tu punto de acceso. Se aplica además del límite del equipo.
-              </div>
+              <div className="n">{t("rules.hotspot")}</div>
+              <div className="d">{t("rules.hotspot.desc")}</div>
               {status && !status.forwardOk && (
                 <div className="d" style={{ color: "var(--red)", marginTop: 4 }}>
-                  Captura de tráfico reenviado no disponible: {status.forwardError ?? "driver no cargado"}
+                  {t("rules.forwardUnavailable", { error: status.forwardError ?? t("rules.driverNotLoaded") })}
                 </div>
               )}
             </div>
@@ -60,30 +56,31 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
           <RuleEditor rule={config.hotspot} units={units} onChange={setHotspot} />
         </div>
 
-        <div className="section-title">Aplicaciones y dispositivos · {appRules.length}</div>
+        <div className="section-title">{t("rules.appsAndDevices")} · {appRules.length}</div>
 
         {appRules.length === 0 && (
           <div className="card empty">
-            No hay reglas por aplicación. Selecciona una app en <b>Actividad</b> para limitarla.
+            {t("rules.empty.pre")} <b>{t("nav.activity")}</b> {t("rules.empty.post")}
           </div>
         )}
 
         {appRules.map(([key, r]) => {
           const live = tick?.apps.find((a) => a.key === key);
           const isDevice = key.startsWith("hotspot:");
+          const meta = { key, name: r.name, description: r.description, isDevice };
           return (
             <div className="card rule-card" key={key}>
               <div className="who">
                 <AppIcon appKey={key} hasExe={!!r.exe} isDevice={isDevice} large />
                 <div className="titles">
                   <div className="n" style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                    {r.name}
-                    <span className={`online ${live && (live.pids.length || live.isDevice) ? "" : "off"}`} title={live?.pids.length ? "En ejecución" : "Sin proceso activo"} />
+                    {appName(meta, t)}
+                    <span className={`online ${live && (live.pids.length || live.isDevice) ? "" : "off"}`} title={live?.pids.length ? t("rules.running") : t("rules.notRunning")} />
                   </div>
-                  <div className="d">{r.description}</div>
+                  <div className="d">{appDescription(meta, t)}</div>
                   {r.exe && <div className="p">{r.exe}</div>}
                   <div className="actions">
-                    <button className="btn ghost" onClick={() => onSelect(key)}>Ver actividad</button>
+                    <button className="btn ghost" onClick={() => onSelect(key)}>{t("rules.viewActivity")}</button>
                     <button
                       className="btn ghost danger"
                       onClick={() =>
@@ -95,7 +92,7 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
                       }
                     >
                       <Trash2 style={{ width: 13, height: 13, verticalAlign: -2, marginRight: 4 }} />
-                      Quitar regla
+                      {t("rules.remove")}
                     </button>
                   </div>
                 </div>

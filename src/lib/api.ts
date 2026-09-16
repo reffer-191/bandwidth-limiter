@@ -73,6 +73,8 @@ export interface Config {
   minimizeToTray: boolean;
   closeToTray: boolean;
   checkUpdates: boolean;
+  language: "system" | "es" | "en";
+  onboardingDone: boolean;
 }
 
 export interface Status {
