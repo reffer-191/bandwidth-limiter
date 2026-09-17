@@ -77,7 +77,15 @@ jobs:
 
       - name: Upload portable and offline installer
         shell: bash
+        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
-          gh release upload "${GITHUB_REF_NAME}" dist-portable/*.zip src-tauri/target/release/bundle/nsis/*_offline-setup.exe --clobber
+          # Large uploads occasionally stall on GitHub's side: retry each file a few times.
+          for f in dist-portable/*.zip src-tauri/target/release/bundle/nsis/*_offline-setup.exe; do
+            for attempt in 1 2 3; do
+              if timeout 8m gh release upload "${GITHUB_REF_NAME}" "$f" --clobber; then break; fi
+              echo "upload of $f failed (attempt $attempt), retrying"; sleep 10
+              [ "$attempt" = 3 ] && exit 1
+            done
+          done
