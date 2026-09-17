@@ -63,7 +63,7 @@ export function NetworkView({ onSelect }: { onSelect: (key: string) => void }) {
                     <td className="num rate dl">{formatRate(d.dl, units)}</td>
                     <td className="num rate ul">{formatRate(d.ul, units)}</td>
                     <td className="num faint">{formatBytes(d.totalDl + d.totalUl)}</td>
-                    <td className="num"><RuleBadges rule={config?.apps[d.key]} units={units} /></td>
+                    <td className="num"><RuleBadges rule={config?.apps[d.key]} units={units} state={tick?.states[d.key]} /></td>
                   </tr>
                 ))}
               </tbody>

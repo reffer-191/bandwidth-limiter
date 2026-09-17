@@ -60,7 +60,45 @@ pub fn relaunch_elevated() -> bool {
 
 /// Best-effort `sc stop <name>`. Fails silently when the service is busy
 /// (another process still holds a handle) or we lack rights.
+/// True when another process with our executable name is running (an
+/// installed copy next to a dev build, for instance). Stopping the driver
+/// underneath it would leave it in STOP_PENDING and break both.
+pub fn another_instance_running() -> bool {
+    use windows_sys::Win32::System::Diagnostics::ToolHelp::{
+        CreateToolhelp32Snapshot, Process32FirstW, Process32NextW, PROCESSENTRY32W, TH32CS_SNAPPROCESS,
+    };
+    let me = std::process::id();
+    let names = ["bandwidthlimiter.exe", "bandwidth-limiter.exe"];
+    unsafe {
+        let snap = CreateToolhelp32Snapshot(TH32CS_SNAPPROCESS, 0);
+        if snap.is_null() || snap == windows_sys::Win32::Foundation::INVALID_HANDLE_VALUE {
+            return false;
+        }
+        let mut e: PROCESSENTRY32W = std::mem::zeroed();
+        e.dwSize = std::mem::size_of::<PROCESSENTRY32W>() as u32;
+        let mut found = false;
+        if Process32FirstW(snap, &mut e) != 0 {
+            loop {
+                let len = e.szExeFile.iter().position(|&c| c == 0).unwrap_or(e.szExeFile.len());
+                let name = String::from_utf16_lossy(&e.szExeFile[..len]).to_lowercase();
+                if e.th32ProcessID != me && names.contains(&name.as_str()) {
+                    found = true;
+                    break;
+                }
+                if Process32NextW(snap, &mut e) == 0 {
+                    break;
+                }
+            }
+        }
+        windows_sys::Win32::Foundation::CloseHandle(snap);
+        found
+    }
+}
+
 pub fn stop_driver_service(name: &str) {
+    if another_instance_running() {
+        return;
+    }
     unsafe {
         let scm = OpenSCManagerW(std::ptr::null(), std::ptr::null(), SC_MANAGER_CONNECT);
         if scm.is_null() {

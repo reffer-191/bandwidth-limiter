@@ -1,5 +1,7 @@
-//! Network adapter enumeration (GetAdaptersAddresses).
+//! Network adapter enumeration (GetAdaptersAddresses) and the metered
+//! connection flag (Network List Manager).
 
+use std::collections::HashMap;
 
 use serde::Serialize;
 use windows_sys::Win32::NetworkManagement::IpHelper::{
@@ -27,6 +29,10 @@ pub struct AdapterInfo {
     pub adapters: Vec<Adapter>,
     /// Every on-link prefix of every adapter that is up.
     pub on_link: Vec<(Addr16, u8)>,
+    /// Interface index (IPv4 and IPv6 ones) → position in `adapters`.
+    pub by_index: HashMap<u32, usize>,
+    /// True when Windows reports the current Internet connection as metered.
+    pub metered: bool,
 }
 
 impl AdapterInfo {
@@ -36,7 +42,7 @@ impl AdapterInfo {
     }
 }
 
-fn prefix_matches(net: &Addr16, addr: &Addr16, plen: u8) -> bool {
+pub fn prefix_matches(net: &Addr16, addr: &Addr16, plen: u8) -> bool {
     let is_v4 = net[..10] == [0u8; 10] && net[10] == 0xff && net[11] == 0xff;
     let (a, b, bits) = if is_v4 {
         if !(addr[..10] == [0u8; 10] && addr[10] == 0xff && addr[11] == 0xff) {
@@ -142,6 +148,10 @@ pub fn enumerate() -> AdapterInfo {
                 if up {
                     info.on_link.extend(prefixes.iter().copied());
                 }
+                info.by_index.insert(if_index, info.adapters.len());
+                if a.Ipv6IfIndex != 0 {
+                    info.by_index.insert(a.Ipv6IfIndex, info.adapters.len());
+                }
                 info.adapters.push(Adapter {
                     if_index,
                     ipv6_if_index: a.Ipv6IfIndex,
@@ -156,5 +166,43 @@ pub fn enumerate() -> AdapterInfo {
             p = a.Next as *const _;
         }
     }
+    info.metered = is_metered();
     info
+}
+
+/// Asks the Network List Manager whether the default Internet connection is
+/// metered (fixed/variable data plan, over the limit, roaming…).
+pub fn is_metered() -> bool {
+    use windows_sys::core::GUID;
+    use windows_sys::Win32::System::Com::{CoCreateInstance, CoInitializeEx, CoUninitialize, CLSCTX_ALL, COINIT_APARTMENTTHREADED};
+
+    #[repr(C)]
+    struct VTable {
+        query_interface: usize,
+        add_ref: usize,
+        release: unsafe extern "system" fn(*mut std::ffi::c_void) -> u32,
+        get_cost: unsafe extern "system" fn(*mut std::ffi::c_void, *mut u32, *const std::ffi::c_void) -> i32,
+    }
+    const CLSID_NETWORK_LIST_MANAGER: GUID = GUID::from_u128(0xDCB00C01_570F_4A9B_8D69_199FDBA5723B);
+    const IID_INETWORK_COST_MANAGER: GUID = GUID::from_u128(0xDCB00008_570F_4A9B_8D69_199FDBA5723B);
+    const UNRESTRICTED: u32 = 0x1;
+
+    unsafe {
+        let hr = CoInitializeEx(std::ptr::null(), COINIT_APARTMENTTHREADED as u32);
+        let mut obj: *mut std::ffi::c_void = std::ptr::null_mut();
+        let ok = CoCreateInstance(&CLSID_NETWORK_LIST_MANAGER, std::ptr::null_mut(), CLSCTX_ALL, &IID_INETWORK_COST_MANAGER, &mut obj);
+        let mut metered = false;
+        if ok == 0 && !obj.is_null() {
+            let vt = *(obj as *const *const VTable);
+            let mut cost: u32 = 0;
+            if ((*vt).get_cost)(obj, &mut cost, std::ptr::null()) == 0 {
+                metered = cost != 0 && cost & UNRESTRICTED == 0;
+            }
+            ((*vt).release)(obj);
+        }
+        if hr >= 0 {
+            CoUninitialize();
+        }
+        metered
+    }
 }

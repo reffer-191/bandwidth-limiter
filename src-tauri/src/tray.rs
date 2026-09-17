@@ -1,29 +1,43 @@
-//! System tray icon: show/hide the window, toggle the limiter, quit.
+//! System tray icon: show/hide the window, toggle the limiter, switch
+//! profiles, quit.
 
-use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem};
+use tauri::menu::{CheckMenuItem, Menu, MenuItem, PredefinedMenuItem, Submenu};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
 use tauri::{AppHandle, Manager, Wry};
 
+use crate::config::Config;
 use crate::engine::Engine;
 use crate::i18n::{tr, Lang};
 
 pub const TRAY_ID: &str = "main";
 
-/// Menu items we need to update later (kept in Tauri's managed state).
 pub struct Tray {
-    pub show: MenuItem<Wry>,
-    pub master: CheckMenuItem<Wry>,
-    pub quit: MenuItem<Wry>,
     pub icon: tauri::image::Image<'static>,
     pub icon_active: tauri::image::Image<'static>,
 }
 
-pub fn setup(app: &AppHandle, master: bool, lang: Lang) -> tauri::Result<()> {
+fn build_menu(app: &AppHandle, cfg: &Config) -> tauri::Result<Menu<Wry>> {
+    let lang: Lang = cfg.lang();
     let show = MenuItem::with_id(app, "show", tr(lang, "tray.show"), true, None::<&str>)?;
-    let master_item = CheckMenuItem::with_id(app, "master", tr(lang, "tray.master"), true, master, None::<&str>)?;
+    let master = CheckMenuItem::with_id(app, "master", tr(lang, "tray.master"), true, cfg.master, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", tr(lang, "tray.quit"), true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&show, &master_item, &PredefinedMenuItem::separator(app)?, &quit])?;
+    let menu = Menu::with_items(app, &[&show, &master])?;
+    if !cfg.profiles.is_empty() {
+        let mut items: Vec<CheckMenuItem<Wry>> = Vec::new();
+        for p in &cfg.profiles {
+            items.push(CheckMenuItem::with_id(app, format!("profile:{}", p.name), &p.name, true, p.name == cfg.active_profile, None::<&str>)?);
+        }
+        let refs: Vec<&dyn tauri::menu::IsMenuItem<Wry>> = items.iter().map(|i| i as &dyn tauri::menu::IsMenuItem<Wry>).collect();
+        let sub = Submenu::with_items(app, tr(lang, "tray.profile"), true, &refs)?;
+        menu.append(&sub)?;
+    }
+    menu.append(&PredefinedMenuItem::separator(app)?)?;
+    menu.append(&quit)?;
+    Ok(menu)
+}
 
+pub fn setup(app: &AppHandle, cfg: &Config) -> tauri::Result<()> {
+    let menu = build_menu(app, cfg)?;
     let mut builder = TrayIconBuilder::with_id(TRAY_ID)
         .tooltip("Bandwidth Limiter")
         .menu(&menu)
@@ -32,7 +46,11 @@ pub fn setup(app: &AppHandle, master: bool, lang: Lang) -> tauri::Result<()> {
             "show" => show_main(app),
             "master" => toggle_master(app),
             "quit" => quit_app(app),
-            _ => {}
+            id => {
+                if let Some(name) = id.strip_prefix("profile:") {
+                    switch_profile(app, name);
+                }
+            }
         })
         .on_tray_icon_event(|tray, event| {
             if let TrayIconEvent::Click { button: MouseButton::Left, button_state: MouseButtonState::Up, .. } = event {
@@ -49,7 +67,7 @@ pub fn setup(app: &AppHandle, master: bool, lang: Lang) -> tauri::Result<()> {
         .to_owned();
     builder = builder.icon(icon.clone());
     builder.build(app)?;
-    app.manage(Tray { show, master: master_item, quit, icon, icon_active });
+    app.manage(Tray { icon, icon_active });
     Ok(())
 }
 
@@ -74,6 +92,17 @@ fn toggle_master(app: &AppHandle) {
     let _ = engine.set_config(cfg);
 }
 
+fn switch_profile(app: &AppHandle, name: &str) {
+    let engine = app.state::<Engine>();
+    let mut cfg = engine.state.config.read().clone();
+    if cfg.switch_profile(name) {
+        let _ = engine.set_config(cfg);
+    } else {
+        // Re-sync the check marks (the click toggled one visually).
+        sync(app, &engine.state.config.read());
+    }
+}
+
 pub fn quit_app(app: &AppHandle) {
     if let Some(engine) = app.try_state::<Engine>() {
         engine.stop();
@@ -81,13 +110,13 @@ pub fn quit_app(app: &AppHandle) {
     app.exit(0);
 }
 
-/// Keeps the tray in sync with the configuration (called after every save).
-pub fn sync(app: &AppHandle, master: bool, lang: Lang) {
-    if let Some(tray) = app.try_state::<Tray>() {
-        let _ = tray.master.set_checked(master);
-        let _ = tray.show.set_text(tr(lang, "tray.show"));
-        let _ = tray.master.set_text(tr(lang, "tray.master"));
-        let _ = tray.quit.set_text(tr(lang, "tray.quit"));
+/// Rebuilds the tray menu from the configuration (called after every save:
+/// language, limiter state and profiles all live there).
+pub fn sync(app: &AppHandle, cfg: &Config) {
+    if let Some(tray) = app.tray_by_id(TRAY_ID) {
+        if let Ok(menu) = build_menu(app, cfg) {
+            let _ = tray.set_menu(Some(menu));
+        }
     }
 }
 

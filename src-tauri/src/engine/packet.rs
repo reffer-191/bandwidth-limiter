@@ -26,6 +26,11 @@ pub fn map_ipv4(b: &[u8]) -> Addr16 {
     a
 }
 
+#[inline]
+pub fn is_v4(a: &Addr16) -> bool {
+    a[..10] == [0u8; 10] && a[10] == 0xff && a[11] == 0xff
+}
+
 pub fn parse(pkt: &[u8]) -> Option<Parsed> {
     if pkt.is_empty() {
         return None;

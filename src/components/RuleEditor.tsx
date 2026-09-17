@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { ArrowDown, ArrowUp } from "lucide-react";
-import type { Limit, Rule } from "../lib/api";
-import { formatRate, unitOptions, type Units } from "../lib/format";
+import { ArrowDown, ArrowUp, ChevronRight } from "lucide-react";
+import type { Limit, Quota, Rule, RuleState, Schedule } from "../lib/api";
+import { formatBytes, formatRate, unitOptions, type Units } from "../lib/format";
 import { useT } from "../lib/i18n";
-import { Switch } from "./ui";
+import { Segmented, Switch } from "./ui";
 
 /** Number input that keeps its own text while the user types. */
 function RateField({
@@ -88,21 +88,166 @@ function enable(l: Limit, v: boolean, fallback: number): Limit {
   return { enabled: v, rate: v && l.rate <= 0 ? fallback : l.rate };
 }
 
+const toTime = (m: number) => `${String(Math.floor(m / 60)).padStart(2, "0")}:${String(m % 60).padStart(2, "0")}`;
+const fromTime = (s: string) => {
+  const [h, m] = s.split(":").map(Number);
+  return isFinite(h) && isFinite(m) ? Math.min(23 * 60 + 59, h * 60 + m) : 0;
+};
+
+function ScheduleEditor({ schedule, onChange, state }: { schedule: Schedule; onChange: (s: Schedule) => void; state?: RuleState }) {
+  const t = useT();
+  const days = t("rule.days").split(",");
+  return (
+    <div className="adv-block">
+      <div className="adv-row">
+        <Switch small label={t("rule.schedule")} on={schedule.enabled} onChange={(enabled) => onChange({ ...schedule, enabled })} />
+        <span className="adv-label">{t("rule.schedule")}</span>
+      </div>
+      {schedule.enabled && (
+        <>
+          <div className="adv-row">
+            <div className="days" role="group">
+              {days.map((d, i) => (
+                <button
+                  key={i}
+                  type="button"
+                  className={`day ${schedule.days[i] ? "on" : ""}`}
+                  aria-pressed={schedule.days[i]}
+                  onClick={() => {
+                    const next = [...schedule.days];
+                    next[i] = !next[i];
+                    onChange({ ...schedule, days: next });
+                  }}
+                >
+                  {d}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="adv-row">
+            <span className="adv-label">{t("rule.schedule.from")}</span>
+            <div className="field time">
+              <input type="time" value={toTime(schedule.from)} onChange={(e) => onChange({ ...schedule, from: fromTime(e.target.value) })} />
+            </div>
+            <span className="adv-label">{t("rule.schedule.to")}</span>
+            <div className="field time">
+              <input type="time" value={toTime(schedule.to)} onChange={(e) => onChange({ ...schedule, to: fromTime(e.target.value) })} />
+            </div>
+          </div>
+          <div className={`rule-summary ${state && !state.active ? "warn" : ""}`}>
+            {state && !state.active ? t("rule.schedule.inactive") : schedule.from === schedule.to ? t("rule.schedule.allDay") : null}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+const QUOTA_UNITS = [
+  { label: "MB", factor: 1024 ** 2 },
+  { label: "GB", factor: 1024 ** 3 },
+];
+
+function QuotaEditor({ quota, onChange, state }: { quota: Quota; onChange: (q: Quota) => void; state?: RuleState }) {
+  const t = useT();
+  const pick = (b: number) => (b >= QUOTA_UNITS[1].factor ? QUOTA_UNITS[1] : QUOTA_UNITS[0]);
+  const [unit, setUnit] = useState(pick(quota.bytes).label);
+  const factor = QUOTA_UNITS.find((u) => u.label === unit)?.factor ?? QUOTA_UNITS[0].factor;
+  const [text, setText] = useState(fmt(quota.bytes / factor));
+  useEffect(() => {
+    const u = pick(quota.bytes);
+    setUnit(u.label);
+    setText(fmt(quota.bytes / u.factor));
+  }, [quota.bytes]);
+  const commit = () => {
+    const v = parseFloat(text.replace(",", "."));
+    if (isFinite(v) && v > 0) onChange({ ...quota, bytes: Math.round(v * factor) });
+  };
+  const used = state?.quotaUsed ?? 0;
+  const pct = quota.bytes > 0 ? Math.min(100, Math.round((used / quota.bytes) * 100)) : 0;
+  return (
+    <div className="adv-block">
+      <div className="adv-row">
+        <Switch small label={t("rule.quota")} on={quota.enabled} onChange={(enabled) => onChange({ ...quota, enabled })} />
+        <span className="adv-label">{t("rule.quota")}</span>
+      </div>
+      {quota.enabled && (
+        <>
+          <div className="adv-row">
+            <div className="field">
+              <input type="number" min={0} step="any" value={text} onChange={(e) => setText(e.target.value)} onBlur={commit} onKeyDown={(e) => e.key === "Enter" && (e.target as HTMLInputElement).blur()} />
+              <select
+                value={unit}
+                onChange={(e) => {
+                  const next = QUOTA_UNITS.find((u) => u.label === e.target.value)!;
+                  setUnit(next.label);
+                  setText(fmt(quota.bytes / next.factor));
+                }}
+              >
+                {QUOTA_UNITS.map((u) => (
+                  <option key={u.label} value={u.label}>{u.label}</option>
+                ))}
+              </select>
+            </div>
+            <div className="field">
+              <select value={quota.period} onChange={(e) => onChange({ ...quota, period: e.target.value as Quota["period"] })} style={{ borderLeft: "none" }}>
+                <option value="day">{t("rule.quota.day")}</option>
+                <option value="week">{t("rule.quota.week")}</option>
+                <option value="month">{t("rule.quota.month")}</option>
+              </select>
+            </div>
+          </div>
+          <div className="adv-row">
+            <Segmented<Quota["action"]>
+              value={quota.action}
+              onChange={(action) => onChange({ ...quota, action })}
+              options={[
+                { value: "block", label: t("rule.quota.block") },
+                { value: "notify", label: t("rule.quota.notify") },
+              ]}
+            />
+          </div>
+          {state && (
+            <div className={`quota-bar ${state.quotaExceeded ? "over" : ""}`} title={t("rule.quota.hint")}>
+              <div className="track"><div className="fill" style={{ width: `${pct}%` }} /></div>
+              <span>{state.quotaExceeded ? t("rule.quota.exceeded") + " · " : ""}{t("rule.quota.used", { used: formatBytes(used), quota: formatBytes(quota.bytes), pct })}</span>
+            </div>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 export function RuleEditor({
   rule,
   units,
   onChange,
   showBlock = true,
+  showPriority = false,
+  showAdvanced = true,
   minRate = MIN_RATE_APP,
+  state,
 }: {
   rule: Rule;
   units: Units;
   onChange: (r: Rule) => void;
   showBlock?: boolean;
+  /** Priority only makes sense for apps/devices sharing a general limit. */
+  showPriority?: boolean;
+  /** Schedule + quota (+ priority) disclosure. */
+  showAdvanced?: boolean;
   /** Rates below this are refused by the engine; the editor warns about them. */
   minRate?: number;
+  /** Live schedule/quota state from the engine, when known. */
+  state?: RuleState;
 }) {
   const t = useT();
+  const hasAdvanced = rule.priority !== "normal" || rule.schedule.enabled || rule.quota.enabled;
+  const [open, setOpen] = useState(hasAdvanced);
+  useEffect(() => {
+    if (hasAdvanced) setOpen(true);
+  }, [hasAdvanced]);
   const low = (l: Limit) => l.enabled && l.rate < minRate;
   const summary = [
     rule.blockDl ? `↓ ${t("rule.blocked")}` : rule.dl.enabled ? `↓ ${formatRate(rule.dl.rate, units)}` : null,
@@ -142,6 +287,38 @@ export function RuleEditor({
               <Switch small on={rule.blockUl} onChange={(v) => onChange({ ...rule, blockUl: v })} /> {t("rule.out")}
             </label>
           </div>
+        </div>
+      )}
+      {showAdvanced && (
+        <div className="rule-advanced">
+          <button type="button" className={`disclosure ${open ? "open" : ""}`} onClick={() => setOpen((v) => !v)} aria-expanded={open}>
+            <ChevronRight />
+            {showPriority ? t("rule.advanced") : t("rule.advanced.noPriority")}
+            {!open && hasAdvanced && <span className="dot" />}
+          </button>
+          {open && (
+            <div className="adv">
+              {showPriority && (
+                <div className="adv-block">
+                  <div className="adv-row">
+                    <span className="adv-label" style={{ minWidth: 60 }}>{t("rule.priority")}</span>
+                    <Segmented<Rule["priority"]>
+                      value={rule.priority}
+                      onChange={(priority) => onChange({ ...rule, priority })}
+                      options={[
+                        { value: "high", label: t("rule.priority.high") },
+                        { value: "normal", label: t("rule.priority.normal") },
+                        { value: "low", label: t("rule.priority.low") },
+                      ]}
+                    />
+                  </div>
+                  {rule.priority !== "normal" && <div className="rule-summary">{t("rule.priority.hint")}</div>}
+                </div>
+              )}
+              <ScheduleEditor schedule={rule.schedule} onChange={(schedule) => onChange({ ...rule, schedule })} state={state} />
+              <QuotaEditor quota={rule.quota} onChange={(quota) => onChange({ ...rule, quota })} state={state} />
+            </div>
+          )}
         </div>
       )}
     </div>

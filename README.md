@@ -13,12 +13,19 @@ A lightweight bandwidth limiter and network traffic monitor for Windows, in the 
 - **Live per-application traffic** – download and upload speed of every process, with its icon and description, plus the devices connected to your Windows mobile hotspot.
 - **Limits** – per application (download and/or upload), for the whole computer (optionally only Internet traffic, ignoring the local network) and for the hotspot. Hotspot traffic also counts against the global limit, so connected devices can never exceed it.
 - **Blocking** – cut incoming and/or outgoing traffic of an application with one switch.
+- **Priorities** – high / normal / low per application: when a general limit is saturated, high-priority apps get most of it (video call) and low-priority ones the leftovers (downloads).
+- **Schedules and data quotas** – any rule can apply only on certain weekdays/hours, and can carry a quota (bytes per day, week or month) that blocks the traffic or just warns you when it runs out.
+- **Connection rules** – limit or block traffic with a remote host, IP range or port (per protocol, for all apps or one), e.g. throttle a CDN or block a tracker port.
+- **Adapter rules** – a different whole-PC limit on Wi-Fi, Ethernet, a specific adapter or whenever Windows reports the connection as *metered*.
+- **Statistics** – usage by hour or by day (today / 7 / 30 days) with a per-application breakdown, stored in a small SQLite database.
+- **Profiles** – switch between complete rule sets (Home / Work / Travel) from the app or the tray icon; export/import rules as JSON.
+- **Notifications** – Windows toasts when a new application uses the network, a quota runs out or a scheduled rule kicks in (each one optional).
 - **History chart (1–60 min)** – hover to see who was using the network at any moment; click a point to freeze the app table at that instant and analyse a peak; mouse-wheel to zoom into a specific second (Shift+wheel pans, double-click resets).
 - **Stable application list** – sorted by name or by accumulated 30-day usage, never by the live speed, so rows don't jump around while you click. Applications that used the network in the last 30 days stay in the list even when they are closed.
 - **Connections and network** – active connections per application, network adapters, hotspot detection.
 - **System tray** – minimise/close to the tray, toggle the limiter from the tray menu, live speeds in the tooltip.
 - **Start with Windows**, start minimised, light/dark theme, bits or bytes, **English and Spanish** interface (follows the Windows language).
-- **Keyboard friendly** – Ctrl+F search, Ctrl+1…4 views, ↑/↓ + Enter in the list, Esc to close.
+- **Keyboard friendly** – Ctrl+F search, Ctrl+1…5 views, ↑/↓ + Enter in the list, Esc to close.
 - **Automatic updates** – new releases are offered in-app and installed with one click (signed update feed).
 - Tiny footprint: ~45 MB of RAM and well under 1 % CPU while shaping.
 
@@ -53,6 +60,30 @@ Click an application to open its detail panel: current speed, 30-day totals, PID
 
 ![Rules view](docs/screenshot-rules.png)
 
+#### Priority, schedule and quota
+Every rule editor has a *Priority, schedule and quota* disclosure:
+
+- **Priority** (applications and devices only): *High* / *Normal* / *Low*. It changes nothing on its own — it decides who gets the bandwidth when a general limit (computer, hotspot or adapter) is saturated. High-priority traffic is served about 16× more than low-priority traffic and 4× more than normal, so a video call marked *High* stays smooth while a download marked *Low* takes what is left.
+- **Only on a schedule**: pick the weekdays and a *from → to* window (local time). A window that crosses midnight (22:00 → 06:00) belongs to the day it starts on; the same start and end time means the whole day. Outside the window the rule is not enforced at all, and the badges in the lists are dimmed.
+- **Data quota**: an allowance in MB/GB per day, week (from Monday) or month, counting download plus upload. When it runs out the rule either **blocks** the traffic until the next period or **only notifies**. The editor shows *Used X of Y (%)*. The whole-computer quota counts every application; the hotspot quota counts the connected devices.
+
+#### Connection rules
+*Rules → Per connection* limits or blocks traffic with a remote endpoint instead of an application:
+
+- **Host, IP or network**: `1.2.3.4`, `10.0.0.0/8`, `2a00::/16` or a host name such as `cdn.example.com` (resolved every 5 minutes — CDNs may answer with other addresses, so prefer IP ranges when you can). Empty = any host.
+- **Ports**: `443`, `80,443`, `6881-6889`; empty = all. **Protocol**: any / TCP / UDP.
+- **Application**: all, or one specific application.
+- The rule has the same limit/block/schedule editor. Connection limits stack with the application and general limits (the strictest wins).
+
+#### Adapter rules
+*Rules → Per adapter* replaces the whole-computer limit for traffic that goes through a given adapter: **Wi-Fi**, **Ethernet**, a specific adapter by name, or **Metered connection** (whatever Windows currently flags as metered — mobile data, tethering, or a network you marked as metered in Windows settings). The first enabled rule that matches is used; when none matches, the normal whole-computer limit applies.
+
+#### Profiles, export and import
+The **Profiles** card at the top of *Rules* keeps named copies of the complete rule set (general limits, adapter and connection rules, every application rule). Create one from the current rules with **New profile**; switching profiles saves the edits into the one you leave and loads the other; the tray icon menu switches them too. **Export…** writes everything (live rules plus profiles) to a JSON file, **Import…** loads such a file (profiles with the same name are replaced).
+
+### Statistics
+*Statistics* (Ctrl+2) shows how much was transferred **today** (by hour), in the **last 7 days** or the **last 30 days** (by day), with download/upload totals and a per-application table with share bars. Click an application to chart only its usage; double-click to jump to it in *Activity*. The data comes from the hourly usage database (see *Where your data lives*).
+
 ### History chart
 - Hover to see the totals and the top applications at that second.
 - **Click** to pin an instant: the table below switches to the speeds of that moment, sorted by usage, with a blue banner and a *Back to live* button. Click the chart again (or the button) to return.
@@ -63,7 +94,7 @@ Click an application to open its detail panel: current speed, 30-day totals, PID
 | Keys | Action |
 |---|---|
 | Ctrl+F | Focus the search box |
-| Ctrl+1 / 2 / 3 / 4 | Activity / Rules / Network / Settings |
+| Ctrl+1 / 2 / 3 / 4 / 5 | Activity / Statistics / Rules / Network / Settings |
 | ↑ ↓ | Move through the application list |
 | Enter | Open / close the detail panel of the focused row |
 | Esc | Close the detail panel, clear the search |
@@ -77,14 +108,17 @@ The app checks the project's releases a few seconds after starting (switch it of
 - *Settings → Close to tray* makes the **X** hide the window instead of quitting, keeping the limits active.
 - *Settings → Start with Windows* creates a scheduled task that launches the app (minimised) at logon with the required privileges. The uninstaller removes it.
 
+### Notifications
+Windows toast notifications, each switchable in *Settings → Notifications*: **New application** (first time a program or hotspot device uses the network — off by default), **Quota reached** and **Scheduled rules** (a rule was activated or deactivated by its schedule). *Test* shows a sample toast; clicking a toast brings the window back.
+
 ## Where your data lives
 
 Everything is stored per Windows user in `%APPDATA%\Bandwidth Limiter\`:
 
 | File | Content |
 |---|---|
-| `config.json` | rules, limits, theme, units, tray/startup options |
-| `usage.json` | applications seen in the last 30 days with daily download/upload totals |
+| `config.json` | rules, limits, profiles, theme, units, tray/startup/notification options |
+| `usage.db` | SQLite database: applications seen in the last 30 days with hourly download/upload totals (feeds Statistics and the quotas). A `usage.json` from versions before 0.7 is imported once and renamed `usage.json.migrated`. |
 
 *Settings → Data* shows the exact path. Delete the folder to reset the app. This applies to both the installer and the portable edition. (Advanced: create an empty file named `portable` next to the portable `.exe` to keep the data in that folder instead.)
 
@@ -94,20 +128,24 @@ Everything is stored per Windows user in `%APPDATA%\Bandwidth Limiter\`:
 |---|---|
 | UI | React + TypeScript + Vite; hand-written CSS, frameless window, Mica/Acrylic backdrop. |
 | Shell | [Tauri 2](https://tauri.app) on top of the system WebView2 — no bundled browser. |
-| Engine | Rust. Packets are captured with **WinDivert** on the `NETWORK` layer (local traffic), `NETWORK_FORWARD` (traffic you forward to hotspot clients), and the `FLOW`/`SOCKET` layers to map each connection to its process. Shaping uses deficit token buckets with one queue per class (application → hotspot → global); packets that don't fit in ~1 s of queue are dropped and TCP adapts. |
+| Engine | Rust. Packets are captured with **WinDivert** on the `NETWORK` layer (local traffic), `NETWORK_FORWARD` (traffic you forward to hotspot clients), and the `FLOW`/`SOCKET` layers to map each connection to its process. Shaping uses deficit token buckets with one queue per class (application → connection rule → hotspot → computer/adapter); when several queues wait on the same bucket the scheduler picks packets by start-time fair queuing weighted by the application's priority. Packets that don't fit in ~1 s of queue are dropped and TCP adapts. Schedules and quotas are re-evaluated every second and only pushed to the shaper when something changes. |
 
 ```
 src/                  frontend (React)
 src-tauri/src/
   windivert.rs        dynamic binding to WinDivert.dll
   engine/mod.rs       capture threads, application table, 1 s ticker → "tick" event
-  engine/shaper.rs    token buckets, queues, scheduler
+  engine/shaper.rs    token buckets, queues, priority-weighted scheduler, connection/adapter matching
+  engine/effective.rs schedules + quotas → what is enforced right now
   engine/flows.rs     5-tuple → PID (WinDivert events + iphlpapi fallback)
-  engine/usage.rs     30-day usage store
+  engine/usage.rs     hourly usage store (SQLite) + statistics queries
+  notify.rs           Windows toast notifications
+  clock.rs            local time / calendar periods
   engine/procinfo.rs  path, description and icon of a process
   autostart.rs        "start with Windows" scheduled task
   tray.rs             system tray
-  config.rs           config.json
+  config.rs           config.json (rules, profiles, preferences)
+  dialogs.rs          Win32 open/save dialogs for import/export
 ```
 
 ## Building from source
@@ -150,6 +188,10 @@ Handy while developing:
 **Why is the certificate self-signed?** Certificates trusted by Windows cost money every year. Projects that want to remove the SmartScreen warning can apply to [SignPath Foundation](https://signpath.org/) (free signing for open-source projects) or buy an OV/EV certificate; the build already supports any certificate through `scripts/sign.ps1`.
 
 **Does it limit my hotspot clients?** Yes: traffic forwarded to devices connected to the Windows mobile hotspot is captured too, appears as a device row, and is subject to the hotspot limit and the global limit.
+
+**A priority does not seem to do anything.** Priorities only matter when a general limit (computer, hotspot or adapter) is saturated: with plenty of bandwidth every app gets what it asks for. Set a computer limit and run two downloads with different priorities to see the difference.
+
+**A host-name connection rule does not catch everything.** The rule matches the addresses the host name resolves to on this PC (refreshed every 5 minutes). Big services answer DNS with many different addresses; use an IP range or a port rule for those.
 
 ## License
 

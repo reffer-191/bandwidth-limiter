@@ -1,11 +1,14 @@
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
 mod autostart;
+mod clock;
 mod commands;
 mod config;
+mod dialogs;
 mod elevate;
 mod engine;
 mod i18n;
+mod notify;
 mod tray;
 mod update;
 mod windivert;
@@ -76,12 +79,13 @@ pub fn run() {
             let _ = win.show();
             // Start minimized when the user asked for it or when the logon task
             // launched us (nobody wants a window popping up at login).
-            let (start_minimized, minimize_to_tray, master, lang) = {
+            let (start_minimized, minimize_to_tray, cfg) = {
                 let engine = app.state::<engine::Engine>();
                 let cfg = engine.state.config.read();
-                (cfg.start_minimized, cfg.minimize_to_tray, cfg.master, cfg.lang())
+                (cfg.start_minimized, cfg.minimize_to_tray, cfg.clone())
             };
-            tray::setup(app.handle(), master, lang)?;
+            tray::setup(app.handle(), &cfg)?;
+            notify::register();
             if app.state::<engine::Engine>().state.config.read().check_updates {
                 update::check_on_startup(app.handle().clone());
             }
@@ -124,6 +128,11 @@ pub fn run() {
             commands::show_window,
             commands::check_update,
             commands::install_update,
+            commands::get_stats,
+            commands::switch_profile,
+            commands::export_rules,
+            commands::import_rules,
+            commands::test_notification,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

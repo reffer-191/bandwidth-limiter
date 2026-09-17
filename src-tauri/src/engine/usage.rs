@@ -1,27 +1,31 @@
 //! Persistent per-application usage: which apps used the network in the last
-//! 30 days and how much (daily buckets), stored as `usage.json` next to the
-//! configuration. Keeps the Activity list stable across restarts.
+//! 30 days and how much, in hourly buckets, stored in `usage.db` (SQLite)
+//! next to the configuration. Keeps the Activity list stable across restarts
+//! and feeds the Statistics view and the data quotas.
+//!
+//! Everything is kept in memory (a few hundred KB); the database only receives
+//! the deltas accumulated since the last flush, inside one transaction.
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use rusqlite::{params, Connection};
 use serde::{Deserialize, Serialize};
 
+use crate::clock::{DAY_MS, HOUR_MS};
 use crate::config::Config;
 
 pub const RETENTION_DAYS: u32 = 30;
-const DAY_MS: u64 = 86_400_000;
 
-#[derive(Serialize, Deserialize, Clone, Copy, Debug, Default)]
-pub struct DayUsage {
-    /// Days since the Unix epoch (UTC).
-    pub day: u32,
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+pub struct HourUsage {
+    /// Hours since the Unix epoch (UTC).
+    pub hour: u32,
     pub dl: u64,
     pub ul: u64,
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, Default)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Clone, Debug, Default)]
 pub struct AppUsage {
     pub name: String,
     pub description: String,
@@ -29,46 +33,213 @@ pub struct AppUsage {
     pub is_device: bool,
     pub first_seen: u64,
     pub last_seen: u64,
-    pub days: Vec<DayUsage>,
+    /// Ascending by hour.
+    pub hours: Vec<HourUsage>,
 }
 
-#[derive(Serialize, Deserialize, Default)]
-#[serde(rename_all = "camelCase", default)]
+#[derive(Default)]
 pub struct UsageStore {
     pub apps: HashMap<String, AppUsage>,
-    #[serde(skip)]
-    dirty: bool,
+    db: Option<Connection>,
+    /// (key, hour) → bytes not yet written.
+    pending: HashMap<(String, u32), (u64, u64)>,
+    meta_dirty: Vec<String>,
 }
 
-fn day_of(ms: u64) -> u32 {
-    (ms / DAY_MS) as u32
+/// The pre-0.7 JSON layout, read once for migration.
+#[derive(Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct LegacyStore {
+    apps: HashMap<String, LegacyApp>,
+}
+#[derive(Deserialize, Serialize, Default)]
+#[serde(rename_all = "camelCase", default)]
+struct LegacyApp {
+    name: String,
+    description: String,
+    exe: String,
+    is_device: bool,
+    first_seen: u64,
+    last_seen: u64,
+    days: Vec<LegacyDay>,
+}
+#[derive(Deserialize, Serialize, Default, Clone, Copy)]
+struct LegacyDay {
+    day: u32,
+    dl: u64,
+    ul: u64,
+}
+
+pub fn hour_of(ms: u64) -> u32 {
+    (ms / HOUR_MS) as u32
 }
 
 impl UsageStore {
     pub fn path() -> PathBuf {
+        Config::path().with_file_name("usage.db")
+    }
+
+    fn legacy_path() -> PathBuf {
         Config::path().with_file_name("usage.json")
     }
 
     pub fn load() -> UsageStore {
-        std::fs::read(Self::path())
-            .ok()
-            .and_then(|b| serde_json::from_slice(&b).ok())
-            .unwrap_or_default()
+        let mut store = UsageStore::default();
+        let path = Self::path();
+        if let Some(dir) = path.parent() {
+            let _ = std::fs::create_dir_all(dir);
+        }
+        match Self::open(&path) {
+            Ok(db) => {
+                store.db = Some(db);
+                store.migrate_legacy();
+                if let Err(e) = store.read_all() {
+                    log::warn!("usage read: {e}");
+                }
+            }
+            Err(e) => log::warn!("usage db {}: {e}", path.display()),
+        }
+        store
     }
 
-    pub fn save(&mut self) -> std::io::Result<()> {
-        if !self.dirty {
+    /// In-memory store (tests).
+    #[cfg(test)]
+    pub fn in_memory() -> UsageStore {
+        UsageStore { db: Self::open_in_memory().ok(), ..Default::default() }
+    }
+
+    fn open(path: &PathBuf) -> rusqlite::Result<Connection> {
+        let db = Connection::open(path)?;
+        Self::init(&db)?;
+        Ok(db)
+    }
+
+    #[cfg(test)]
+    fn open_in_memory() -> rusqlite::Result<Connection> {
+        let db = Connection::open_in_memory()?;
+        Self::init(&db)?;
+        Ok(db)
+    }
+
+    fn init(db: &Connection) -> rusqlite::Result<()> {
+        db.execute_batch(
+            "PRAGMA journal_mode = WAL;
+             PRAGMA synchronous = NORMAL;
+             CREATE TABLE IF NOT EXISTS apps (
+               key TEXT PRIMARY KEY, name TEXT NOT NULL DEFAULT '', description TEXT NOT NULL DEFAULT '',
+               exe TEXT NOT NULL DEFAULT '', is_device INTEGER NOT NULL DEFAULT 0,
+               first_seen INTEGER NOT NULL DEFAULT 0, last_seen INTEGER NOT NULL DEFAULT 0);
+             CREATE TABLE IF NOT EXISTS usage (
+               key TEXT NOT NULL, hour INTEGER NOT NULL, dl INTEGER NOT NULL DEFAULT 0, ul INTEGER NOT NULL DEFAULT 0,
+               PRIMARY KEY (key, hour)) WITHOUT ROWID;",
+        )
+    }
+
+    /// One-off import of `usage.json` (daily buckets) into an *empty*
+    /// database; a json file written later by an older build is ignored.
+    fn migrate_legacy(&mut self) {
+        let legacy = Self::legacy_path();
+        let Ok(bytes) = std::fs::read(&legacy) else { return };
+        let Ok(old) = serde_json::from_slice::<LegacyStore>(&bytes) else { return };
+        if let Some(db) = self.db.as_mut() {
+            let rows: i64 = db.query_row("SELECT COUNT(*) FROM usage", [], |r| r.get(0)).unwrap_or(0);
+            if rows > 0 {
+                return;
+            }
+            let r: rusqlite::Result<()> = (|| {
+                let tx = db.transaction()?;
+                for (key, a) in &old.apps {
+                    tx.execute(
+                        "INSERT INTO apps (key, name, description, exe, is_device, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                         ON CONFLICT(key) DO UPDATE SET name = excluded.name, description = excluded.description, exe = excluded.exe,
+                           is_device = excluded.is_device, last_seen = MAX(last_seen, excluded.last_seen)",
+                        params![key, a.name, a.description, a.exe, a.is_device as i64, a.first_seen as i64, a.last_seen as i64],
+                    )?;
+                    for d in &a.days {
+                        // Daily totals land at midday of their (UTC) day.
+                        let hour = d.day * 24 + 12;
+                        tx.execute(
+                            "INSERT INTO usage (key, hour, dl, ul) VALUES (?1, ?2, ?3, ?4)
+                             ON CONFLICT(key, hour) DO UPDATE SET dl = dl + excluded.dl, ul = ul + excluded.ul",
+                            params![key, hour as i64, d.dl as i64, d.ul as i64],
+                        )?;
+                    }
+                }
+                tx.commit()
+            })();
+            match r {
+                Ok(()) => {
+                    let _ = std::fs::rename(&legacy, legacy.with_extension("json.migrated"));
+                    log::info!("usage: migrated {} apps from usage.json", old.apps.len());
+                }
+                Err(e) => log::warn!("usage migration: {e}"),
+            }
+        }
+    }
+
+    fn read_all(&mut self) -> rusqlite::Result<()> {
+        let Some(db) = self.db.as_ref() else { return Ok(()) };
+        let mut apps = HashMap::new();
+        {
+            let mut st = db.prepare("SELECT key, name, description, exe, is_device, first_seen, last_seen FROM apps")?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    AppUsage {
+                        name: r.get(1)?,
+                        description: r.get(2)?,
+                        exe: r.get(3)?,
+                        is_device: r.get::<_, i64>(4)? != 0,
+                        first_seen: r.get::<_, i64>(5)? as u64,
+                        last_seen: r.get::<_, i64>(6)? as u64,
+                        hours: Vec::new(),
+                    },
+                ))
+            })?;
+            for row in rows {
+                let (k, a) = row?;
+                apps.insert(k, a);
+            }
+        }
+        let mut st = db.prepare("SELECT key, hour, dl, ul FROM usage ORDER BY key, hour")?;
+        let rows = st.query_map([], |r| {
+            Ok((r.get::<_, String>(0)?, HourUsage { hour: r.get::<_, i64>(1)? as u32, dl: r.get::<_, i64>(2)? as u64, ul: r.get::<_, i64>(3)? as u64 }))
+        })?;
+        for row in rows {
+            let (k, h) = row?;
+            apps.entry(k).or_default().hours.push(h);
+        }
+        self.apps = apps;
+        Ok(())
+    }
+
+    /// Writes the pending deltas. Cheap when nothing changed.
+    pub fn save(&mut self) -> Result<(), String> {
+        if self.pending.is_empty() && self.meta_dirty.is_empty() {
             return Ok(());
         }
-        let p = Self::path();
-        if let Some(dir) = p.parent() {
-            std::fs::create_dir_all(dir)?;
+        let Some(db) = self.db.as_mut() else { return Ok(()) };
+        let tx = db.transaction().map_err(|e| e.to_string())?;
+        for key in self.meta_dirty.drain(..) {
+            if let Some(a) = self.apps.get(&key) {
+                tx.execute(
+                    "INSERT INTO apps (key, name, description, exe, is_device, first_seen, last_seen) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)
+                     ON CONFLICT(key) DO UPDATE SET name = excluded.name, description = excluded.description, exe = excluded.exe,
+                       is_device = excluded.is_device, last_seen = excluded.last_seen",
+                    params![key, a.name, a.description, a.exe, a.is_device as i64, a.first_seen as i64, a.last_seen as i64],
+                )
+                .map_err(|e| e.to_string())?;
+            }
         }
-        let tmp = p.with_extension("json.tmp");
-        std::fs::write(&tmp, serde_json::to_vec(self).unwrap())?;
-        std::fs::rename(&tmp, &p)?;
-        self.dirty = false;
-        Ok(())
+        for ((key, hour), (dl, ul)) in self.pending.drain() {
+            tx.execute(
+                "INSERT INTO usage (key, hour, dl, ul) VALUES (?1, ?2, ?3, ?4)
+                 ON CONFLICT(key, hour) DO UPDATE SET dl = dl + excluded.dl, ul = ul + excluded.ul",
+                params![key, hour as i64, dl as i64, ul as i64],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        tx.commit().map_err(|e| e.to_string())
     }
 
     /// Records traffic for an app; metadata is refreshed so renamed/moved
@@ -77,61 +248,152 @@ impl UsageStore {
         if dl == 0 && ul == 0 {
             return;
         }
-        let entry = self.apps.entry(key.to_string()).or_insert_with(|| AppUsage {
-            first_seen: now_ms,
-            ..Default::default()
-        });
+        let entry = self.apps.entry(key.to_string()).or_insert_with(|| AppUsage { first_seen: now_ms, ..Default::default() });
         entry.name = meta.name.clone();
         entry.description = meta.description.clone();
         entry.exe = meta.exe.clone();
         entry.is_device = meta.is_device;
         entry.last_seen = now_ms;
-        let today = day_of(now_ms);
-        match entry.days.last_mut() {
-            Some(d) if d.day == today => {
-                d.dl += dl;
-                d.ul += ul;
+        let hour = hour_of(now_ms);
+        match entry.hours.last_mut() {
+            Some(h) if h.hour == hour => {
+                h.dl += dl;
+                h.ul += ul;
             }
-            _ => entry.days.push(DayUsage { day: today, dl, ul }),
+            _ => entry.hours.push(HourUsage { hour, dl, ul }),
         }
-        self.dirty = true;
+        let p = self.pending.entry((key.to_string(), hour)).or_default();
+        p.0 += dl;
+        p.1 += ul;
+        if !self.meta_dirty.iter().any(|k| k == key) {
+            self.meta_dirty.push(key.to_string());
+        }
     }
 
-    /// Drops day buckets and apps outside the retention window.
+    /// Drops hour buckets and apps outside the retention window.
     pub fn prune(&mut self, now_ms: u64) {
-        let cutoff_day = day_of(now_ms).saturating_sub(RETENTION_DAYS);
+        let cutoff_hour = hour_of(now_ms).saturating_sub(RETENTION_DAYS * 24);
         let cutoff_ms = now_ms.saturating_sub(RETENTION_DAYS as u64 * DAY_MS);
-        let before = self.apps.len();
         for a in self.apps.values_mut() {
-            let n = a.days.len();
-            a.days.retain(|d| d.day >= cutoff_day);
-            if a.days.len() != n {
-                self.dirty = true;
-            }
+            a.hours.retain(|h| h.hour >= cutoff_hour);
         }
         self.apps.retain(|_, a| a.last_seen >= cutoff_ms);
-        if self.apps.len() != before {
-            self.dirty = true;
+        if let Some(db) = self.db.as_ref() {
+            let _ = db.execute("DELETE FROM usage WHERE hour < ?1", params![cutoff_hour as i64]);
+            let _ = db.execute("DELETE FROM apps WHERE last_seen < ?1", params![cutoff_ms as i64]);
         }
     }
 
     /// (download, upload) bytes within the retention window.
     pub fn totals(&self, key: &str, now_ms: u64) -> (u64, u64) {
-        let cutoff_day = day_of(now_ms).saturating_sub(RETENTION_DAYS);
+        self.sum_since(key, now_ms.saturating_sub(RETENTION_DAYS as u64 * DAY_MS))
+    }
+
+    /// (download, upload) bytes in hour buckets starting at or after `from_ms`.
+    pub fn sum_since(&self, key: &str, from_ms: u64) -> (u64, u64) {
+        let from = hour_of(from_ms);
         self.apps
             .get(key)
             .map(|a| {
-                a.days
-                    .iter()
-                    .filter(|d| d.day >= cutoff_day)
-                    .fold((0, 0), |(dl, ul), d| (dl + d.dl, ul + d.ul))
+                let start = a.hours.partition_point(|h| h.hour < from);
+                a.hours[start..].iter().fold((0, 0), |(dl, ul), h| (dl + h.dl, ul + h.ul))
             })
             .unwrap_or((0, 0))
+    }
+
+    /// Sum over every app matching `filter` since `from_ms`.
+    pub fn sum_all_since(&self, from_ms: u64, filter: impl Fn(&str, &AppUsage) -> bool) -> (u64, u64) {
+        let from = hour_of(from_ms);
+        let mut t = (0, 0);
+        for (k, a) in &self.apps {
+            if !filter(k, a) {
+                continue;
+            }
+            let start = a.hours.partition_point(|h| h.hour < from);
+            for h in &a.hours[start..] {
+                t.0 += h.dl;
+                t.1 += h.ul;
+            }
+        }
+        t
     }
 
     pub fn last_seen(&self, key: &str) -> u64 {
         self.apps.get(key).map(|a| a.last_seen).unwrap_or(0)
     }
+
+    /// Time series and per-app totals between `from_ms` and `to_ms`, in
+    /// buckets of `bucket_ms` aligned to `from_ms`. `key` restricts the series
+    /// to one app (the per-app totals always cover everything).
+    pub fn stats(&self, from_ms: u64, to_ms: u64, bucket_ms: u64, key: Option<&str>) -> Stats {
+        let n = ((to_ms.saturating_sub(from_ms)) + bucket_ms - 1) / bucket_ms;
+        let mut buckets: Vec<StatBucket> = (0..n).map(|i| StatBucket { t: from_ms + i * bucket_ms, dl: 0, ul: 0 }).collect();
+        let from_hour = hour_of(from_ms);
+        let to_hour = hour_of(to_ms.saturating_sub(1));
+        let mut apps: Vec<StatApp> = Vec::new();
+        let mut total = (0u64, 0u64);
+        for (k, a) in &self.apps {
+            let start = a.hours.partition_point(|h| h.hour < from_hour);
+            let mut sum = (0u64, 0u64);
+            for h in &a.hours[start..] {
+                if h.hour > to_hour {
+                    break;
+                }
+                sum.0 += h.dl;
+                sum.1 += h.ul;
+                if key.map(|kk| kk == k).unwrap_or(true) {
+                    let t = h.hour as u64 * HOUR_MS;
+                    let i = t.saturating_sub(from_ms) / bucket_ms;
+                    if let Some(b) = buckets.get_mut(i as usize) {
+                        b.dl += h.dl;
+                        b.ul += h.ul;
+                    }
+                }
+            }
+            if sum.0 + sum.1 > 0 {
+                total.0 += sum.0;
+                total.1 += sum.1;
+                apps.push(StatApp {
+                    key: k.clone(),
+                    name: a.name.clone(),
+                    description: a.description.clone(),
+                    exe: a.exe.clone(),
+                    is_device: a.is_device,
+                    dl: sum.0,
+                    ul: sum.1,
+                });
+            }
+        }
+        apps.sort_by(|a, b| (b.dl + b.ul).cmp(&(a.dl + a.ul)).then_with(|| a.name.cmp(&b.name)));
+        Stats { buckets, apps, total: StatBucket { t: from_ms, dl: total.0, ul: total.1 } }
+    }
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct StatBucket {
+    /// Bucket start, Unix ms.
+    pub t: u64,
+    pub dl: u64,
+    pub ul: u64,
+}
+
+#[derive(Serialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct StatApp {
+    pub key: String,
+    pub name: String,
+    pub description: String,
+    pub exe: String,
+    pub is_device: bool,
+    pub dl: u64,
+    pub ul: u64,
+}
+
+#[derive(Serialize, Clone, Debug, Default)]
+pub struct Stats {
+    pub buckets: Vec<StatBucket>,
+    pub apps: Vec<StatApp>,
+    pub total: StatBucket,
 }
 
 #[cfg(test)]
@@ -144,22 +406,44 @@ mod tests {
 
     #[test]
     fn rolling_window_and_prune() {
-        let mut s = UsageStore::default();
+        let mut s = UsageStore::in_memory();
         let day = DAY_MS;
         let now = 100 * day + 5000;
         s.add("a", &meta("a"), 10, 1, now - 40 * day); // too old
         s.add("a", &meta("a"), 20, 2, now - 10 * day);
         s.add("a", &meta("a"), 30, 3, now);
-        s.add("a", &meta("a"), 5, 5, now + 1000); // same day bucket
+        s.add("a", &meta("a"), 5, 5, now + 1000); // same hour bucket
         s.add("old", &meta("old"), 99, 99, now - 45 * day);
         assert_eq!(s.totals("a", now), (55, 10));
-        assert_eq!(s.apps["a"].days.len(), 3);
+        assert_eq!(s.apps["a"].hours.len(), 3);
+        assert_eq!(s.sum_since("a", now - day), (35, 8));
+        s.save().unwrap();
         s.prune(now);
         assert!(s.apps.get("old").is_none(), "apps unseen for 30 days are dropped");
-        assert_eq!(s.apps["a"].days.len(), 2, "old day buckets are dropped");
+        assert_eq!(s.apps["a"].hours.len(), 2, "old hour buckets are dropped");
         assert_eq!(s.totals("a", now), (55, 10));
-        let json = serde_json::to_string(&s).unwrap();
-        let back: UsageStore = serde_json::from_str(&json).unwrap();
+        // Reload from the database: the pending deltas were written.
+        let mut back = UsageStore { db: s.db.take(), ..Default::default() };
+        back.read_all().unwrap();
         assert_eq!(back.totals("a", now), (55, 10));
+        assert!(back.apps.get("old").is_none());
+    }
+
+    #[test]
+    fn stats_buckets() {
+        let mut s = UsageStore::in_memory();
+        let from = 200 * DAY_MS;
+        s.add("a", &meta("a"), 100, 10, from + HOUR_MS / 2);
+        s.add("a", &meta("a"), 100, 10, from + 3 * HOUR_MS);
+        s.add("b", &meta("b"), 5, 5, from + 3 * HOUR_MS);
+        let st = s.stats(from, from + DAY_MS, HOUR_MS, None);
+        assert_eq!(st.buckets.len(), 24);
+        assert_eq!(st.buckets[0].dl, 100);
+        assert_eq!(st.buckets[3].dl, 105);
+        assert_eq!(st.total.dl, 205);
+        assert_eq!(st.apps[0].key, "a");
+        let only_b = s.stats(from, from + DAY_MS, HOUR_MS, Some("b"));
+        assert_eq!(only_b.buckets[3].dl, 5);
+        assert_eq!(only_b.apps.len(), 2, "app totals are not filtered");
     }
 }

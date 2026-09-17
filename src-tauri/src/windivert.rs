@@ -70,6 +70,8 @@ pub struct FlowData {
 impl Address {
     #[inline] pub fn event(&self) -> u8 { ((self.flags >> 8) & 0xff) as u8 }
     #[inline] pub fn outbound(&self) -> bool { self.flags & (1 << 17) != 0 }
+    /// NETWORK / NETWORK_FORWARD layers: interface the packet is on.
+    #[inline] pub fn if_idx(&self) -> u32 { u32::from_ne_bytes(self.data[0..4].try_into().unwrap()) }
 
     pub fn flow(&self) -> FlowData {
         let d = &self.data;

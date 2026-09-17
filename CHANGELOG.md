@@ -4,6 +4,24 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.0] - 2026-09-17
+
+### Added
+- **Priorities** (high / normal / low) per application or device. They only matter when a general limit (computer, hotspot or adapter) is saturated: high-priority apps get most of it, low-priority ones the leftovers (weighted fair queuing, 16:4:1).
+- **Schedules**: any rule can apply only on selected weekdays and within a time window (overnight windows such as 22:00 → 06:00 work); outside it the rule is simply not enforced.
+- **Data quotas** per rule: bytes per day / week / month (download + upload); when reached the rule blocks the traffic or only notifies. Usage and percentage are shown in the editor and as badges in the lists.
+- **Windows notifications** (toasts): first time an application or device uses the network, quota reached, rule activated/deactivated by its schedule. Each one can be switched off in *Settings → Notifications*; a *Test* button shows a sample.
+- **Connection rules**: limit or block traffic with a remote IP, network (CIDR) or host name, on given ports and protocol (TCP/UDP), for every application or just one. Host names are resolved every 5 minutes.
+- **Adapter rules**: replace the whole-computer limit for traffic on Wi-Fi, Ethernet, a specific adapter or whenever Windows reports the connection as metered.
+- **Statistics** view (Ctrl+2): usage by hour (today) or by day (7 / 30 days), totals and per-application breakdown with share bars; click an application to chart only its usage.
+- **Profiles**: named rule sets (Home / Work / Travel…) switchable from the Rules view or the tray icon menu; **export / import** of all rules and profiles as a JSON file.
+- Usage history moved from `usage.json` to a small SQLite database (`usage.db`) with hourly buckets for the last 30 days; the old file is imported once.
+
+### Changed
+- Views are now Activity, Statistics, Rules, Network, Settings (Ctrl+1…5).
+- The capture handle uses a higher WinDivert priority so other WinDivert-based tools (or an older copy of the app) only see what the limiter lets through, and the driver is no longer stopped on exit while another copy of the app is running.
+- *Settings → Engine* reports the number of captured packets and the last capture error.
+
 ## [0.6.2] - 2026-09-17
 
 ### Fixed

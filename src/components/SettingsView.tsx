@@ -14,6 +14,8 @@ const LICENSES: { name: string; license: string; url: string }[] = [
   { name: "React", license: "MIT", url: "https://react.dev" },
   { name: "Lucide icons", license: "ISC", url: "https://lucide.dev" },
   { name: "Vite", license: "MIT", url: "https://vitejs.dev" },
+  { name: "SQLite (via rusqlite)", license: "Public domain / MIT", url: "https://sqlite.org" },
+  { name: "tauri-winrt-notification", license: "MIT / Apache-2.0", url: "https://github.com/tauri-apps/winrt-notification" },
   { name: "window-vibrancy, parking_lot, serde, libloading, png (Rust crates)", license: "MIT / Apache-2.0", url: "https://crates.io" },
   { name: "NSIS", license: "zlib/libpng", url: "https://nsis.sourceforge.io" },
 ];
@@ -24,7 +26,7 @@ function openExternal(url: string) {
 
 export function SettingsView() {
   const t = useT();
-  const { config, updateConfig, status } = useEngine();
+  const { config, updateConfig, status, refreshStatus } = useEngine();
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [licenses, setLicenses] = useState(false);
@@ -50,7 +52,10 @@ export function SettingsView() {
 
   useEffect(() => {
     api.autostart().then(setAutostart).catch(() => setAutostart(false));
-  }, []);
+    // Packet counter / last error are live values.
+    const id = setInterval(() => refreshStatus().catch(() => {}), 2000);
+    return () => clearInterval(id);
+  }, [refreshStatus]);
   const toggleAutostart = async (v: boolean) => {
     setAutostart(v);
     setAutostartError(null);
@@ -145,6 +150,22 @@ export function SettingsView() {
           </Row>
         </div>
 
+        <div className="section-title">{t("set.notifications")}</div>
+        <div className="card">
+          <Row title={t("set.notify.newApp")} desc={t("set.notify.newApp.desc")}>
+            <Switch label={t("set.notify.newApp")} on={config.notifyNewApp} onChange={(notifyNewApp) => updateConfig((c) => ({ ...c, notifyNewApp }))} />
+          </Row>
+          <Row title={t("set.notify.quota")} desc={t("set.notify.quota.desc")}>
+            <Switch label={t("set.notify.quota")} on={config.notifyQuota} onChange={(notifyQuota) => updateConfig((c) => ({ ...c, notifyQuota }))} />
+          </Row>
+          <Row title={t("set.notify.schedule")} desc={t("set.notify.schedule.desc")}>
+            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+              <button className="btn ghost" onClick={() => api.testNotification().catch(() => {})}>{t("set.notify.test")}</button>
+              <Switch label={t("set.notify.schedule")} on={config.notifySchedule} onChange={(notifySchedule) => updateConfig((c) => ({ ...c, notifySchedule }))} />
+            </div>
+          </Row>
+        </div>
+
         <div className="section-title">{t("set.tray")}</div>
         <div className="card">
           <Row title={t("set.minToTray")} desc={t("set.minToTray.desc")}>
@@ -160,7 +181,16 @@ export function SettingsView() {
           <Row title={t("set.admin")} desc={t("set.admin.desc")}>
             <span className={`badge ${status?.elevated ? "green" : "block"}`}>{status?.elevated ? t("set.elevated") : t("set.notElevated")}</span>
           </Row>
-          <Row title={t("set.driver")} desc={<span className="mono" style={{ fontSize: 11 }}>{status?.windivertPath || t("set.driver.notLoaded")}</span>}>
+          <Row
+            title={t("set.driver")}
+            desc={
+              <>
+                <span className="mono" style={{ fontSize: 11 }}>{status?.windivertPath || t("set.driver.notLoaded")}</span>
+                {status?.driverOk && <><br />{t("set.packets", { n: (status.packets ?? 0).toLocaleString() })}</>}
+                {status?.lastError && <><br /><span style={{ color: "var(--red)" }}>{status.lastError}</span></>}
+              </>
+            }
+          >
             <span className={`badge ${status?.driverOk ? "green" : "block"}`}>{status?.driverOk ? t("set.active") : status?.driverError ?? t("set.inactive")}</span>
           </Row>
           <Row title={t("set.forward")} desc={t("set.forward.desc")}>
@@ -173,6 +203,7 @@ export function SettingsView() {
           <Row title={t("set.config")} desc={<span className="mono" style={{ fontSize: 11 }}>{status?.configPath || "—"}</span>}>
             <span className="badge">{status?.configPath?.toLowerCase().includes("appdata") ? t("set.installed") : t("set.portable")}</span>
           </Row>
+          <Row title={t("set.usage")} desc={<><span>{t("set.usage.desc")}</span><br /><span className="mono" style={{ fontSize: 11 }}>{status?.configPath ? status.configPath.replace(/config[.]json$/i, "usage.db") : "—"}</span></>} />
         </div>
 
         <div className="section-title">{t("set.about")}</div>

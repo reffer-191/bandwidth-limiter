@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { ArrowDown, ArrowUp, Ban, Globe, Wifi, Gauge, Monitor, X, FolderOpen } from "lucide-react";
-import { api, emptyRule, ruleActive, type AppRate, type FlowView, type Rule, type Sample } from "../lib/api";
+import { ArrowDown, ArrowUp, Ban, Globe, Wifi, Gauge, Monitor, X, FolderOpen, Clock, PieChart, ChevronsUp, ChevronsDown } from "lucide-react";
+import { api, emptyRule, ruleActive, type AppRate, type FlowView, type Rule, type RuleState, type Sample } from "../lib/api";
 import { useEngine } from "../lib/engine";
 import { formatBytes, formatRate, formatTime, type Units } from "../lib/format";
 import { useT, type T } from "../lib/i18n";
@@ -236,7 +236,7 @@ export function ActivityView({ filter, selected, onSelect }: {
                       <td className={`num rate ul ${a.ul === 0 ? "zero" : ""}`}>{formatRate(a.ul, units)}</td>
                       <td className="num faint" title={`↓ ${formatBytes(a.totalDl)} · ↑ ${formatBytes(a.totalUl)}`}>{formatBytes(a.totalDl + a.totalUl)}</td>
                       <td className="num">
-                        <RuleBadges rule={rule} units={units} />
+                        <RuleBadges rule={rule} units={units} state={tick?.states[a.key]} />
                       </td>
                     </tr>
                   );
@@ -257,6 +257,7 @@ export function ActivityView({ filter, selected, onSelect }: {
           app={selectedApp}
           units={units}
           rule={config?.apps[selectedApp.key]}
+          state={tick?.states[selectedApp.key]}
           history={history}
           minutes={minutes}
           onClose={() => onSelect(null)}
@@ -291,14 +292,22 @@ function keyToId(key: string, apps: Map<number, AppRate>): number {
   return -1;
 }
 
-export function RuleBadges({ rule, units }: { rule: Rule | undefined; units: Units }) {
+export function RuleBadges({ rule, units, state }: { rule: Rule | undefined; units: Units; state?: RuleState }) {
+  const t = useT();
   if (!rule || !ruleActive(rule)) return <span className="faint">—</span>;
+  const off = state ? !state.active : false;
+  const over = !!state?.quotaExceeded && rule.quota.action === "block";
   return (
-    <div className="limits">
-      {rule.blockDl && <span className="badge block"><Ban /> ↓</span>}
-      {rule.blockUl && <span className="badge block"><Ban /> ↑</span>}
-      {rule.dl.enabled && !rule.blockDl && <span className="badge dl"><ArrowDown /> {formatRate(rule.dl.rate, units)}</span>}
-      {rule.ul.enabled && !rule.blockUl && <span className="badge ul"><ArrowUp /> {formatRate(rule.ul.rate, units)}</span>}
+    <div className={`limits ${off ? "off" : ""}`} title={off ? t("badge.off") : undefined}>
+      {rule.priority === "high" && <span className="badge green" title={`${t("rule.priority")}: ${t("rule.priority.high")}`}><ChevronsUp /></span>}
+      {rule.priority === "low" && <span className="badge" title={`${t("rule.priority")}: ${t("rule.priority.low")}`}><ChevronsDown /></span>}
+      {over && <span className="badge block" title={t("rule.quota.exceeded")}><Ban /> {t("rule.quota.exceeded")}</span>}
+      {!over && rule.blockDl && <span className="badge block"><Ban /> ↓</span>}
+      {!over && rule.blockUl && <span className="badge block"><Ban /> ↑</span>}
+      {!over && rule.dl.enabled && !rule.blockDl && <span className="badge dl"><ArrowDown /> {formatRate(rule.dl.rate, units)}</span>}
+      {!over && rule.ul.enabled && !rule.blockUl && <span className="badge ul"><ArrowUp /> {formatRate(rule.ul.rate, units)}</span>}
+      {rule.schedule.enabled && <span className="badge" title={off ? t("badge.off") : t("badge.schedule")}><Clock /></span>}
+      {rule.quota.enabled && !over && <span className="badge" title={t("badge.quota")}><PieChart /></span>}
     </div>
   );
 }
@@ -393,10 +402,11 @@ function AppSparkline({ appId, history, minutes, units }: { appId: number; histo
   );
 }
 
-function DetailPanel({ app, units, rule, history, minutes, onClose, onRule }: {
+function DetailPanel({ app, units, rule, state, history, minutes, onClose, onRule }: {
   app: AppRate;
   units: Units;
   rule: Rule | undefined;
+  state?: RuleState;
   history: Sample[];
   minutes: number;
   onClose: () => void;
@@ -433,7 +443,7 @@ function DetailPanel({ app, units, rule, history, minutes, onClose, onRule }: {
 
       <div className="detail-section">
         <h3><Gauge style={{ width: 11, height: 11, verticalAlign: -1 }} /> {t("detail.limits")}</h3>
-        <RuleEditor rule={current} units={units} onChange={onRule} />
+        <RuleEditor rule={current} units={units} onChange={onRule} showPriority state={state} />
       </div>
 
       <div className="detail-section">

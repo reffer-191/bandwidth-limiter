@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Activity, SlidersHorizontal, Network, Settings, Search, AlertTriangle, ShieldAlert, Download } from "lucide-react";
+import { Activity, SlidersHorizontal, Network, Settings, Search, AlertTriangle, ShieldAlert, Download, BarChart3 } from "lucide-react";
 import { useEngine } from "./lib/engine";
 import { api, onEvent, ruleActive, type UpdateInfo } from "./lib/api";
 import { formatRate } from "./lib/format";
@@ -9,12 +9,16 @@ import { ActivityView } from "./components/ActivityView";
 import { RulesView } from "./components/RulesView";
 import { NetworkView } from "./components/NetworkView";
 import { SettingsView } from "./components/SettingsView";
+import { StatsView } from "./components/StatsView";
 import { Onboarding } from "./components/Onboarding";
 
-type View = "activity" | "rules" | "network" | "settings";
+type View = "activity" | "stats" | "rules" | "network" | "settings";
+
+const VIEWS: View[] = ["activity", "stats", "rules", "network", "settings"];
 
 const TITLE_KEYS: Record<View, Key> = {
   activity: "nav.activity",
+  stats: "nav.stats",
   rules: "nav.rules",
   network: "nav.network",
   settings: "nav.settings",
@@ -69,7 +73,7 @@ function Shell() {
     return () => mq.removeEventListener("change", apply);
   }, [config?.theme]);
 
-  // Global shortcuts: Ctrl+F focuses the search, Ctrl+1..4 switch views,
+  // Global shortcuts: Ctrl+F focuses the search, Ctrl+1..5 switch views,
   // Escape clears the search / closes the detail panel.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -78,9 +82,9 @@ function Shell() {
         e.preventDefault();
         setView("activity");
         setTimeout(() => searchRef.current?.focus(), 0);
-      } else if ((e.ctrlKey || e.metaKey) && ["1", "2", "3", "4"].includes(e.key)) {
+      } else if ((e.ctrlKey || e.metaKey) && ["1", "2", "3", "4", "5"].includes(e.key)) {
         e.preventDefault();
-        setView((["activity", "rules", "network", "settings"] as View[])[Number(e.key) - 1]);
+        setView(VIEWS[Number(e.key) - 1]);
       } else if (e.key === "Escape" && !inField) {
         setSelected(null);
       } else if (e.key === "Escape" && inField && (e.target as HTMLInputElement) === searchRef.current) {
@@ -94,7 +98,13 @@ function Shell() {
 
   const ruleCount = useMemo(() => {
     if (!config) return 0;
-    return Object.values(config.apps).filter(ruleActive).length + (ruleActive(config.global) ? 1 : 0) + (ruleActive(config.hotspot) ? 1 : 0);
+    return (
+      Object.values(config.apps).filter(ruleActive).length +
+      (ruleActive(config.global) ? 1 : 0) +
+      (ruleActive(config.hotspot) ? 1 : 0) +
+      config.connections.filter((c) => c.enabled && ruleActive(c)).length +
+      config.adapters.filter((a) => a.enabled && ruleActive(a)).length
+    );
   }, [config]);
 
   const goToApp = (key: string) => {
@@ -114,9 +124,10 @@ function Shell() {
         </div>
         <nav className="nav" aria-label="Main">
           <NavItem icon={<Activity />} label={t("nav.activity")} hint="Ctrl+1" active={view === "activity"} onClick={() => setView("activity")} />
-          <NavItem icon={<SlidersHorizontal />} label={t("nav.rules")} hint="Ctrl+2" active={view === "rules"} onClick={() => setView("rules")} count={ruleCount || undefined} />
-          <NavItem icon={<Network />} label={t("nav.network")} hint="Ctrl+3" active={view === "network"} onClick={() => setView("network")} />
-          <NavItem icon={<Settings />} label={t("nav.settings")} hint="Ctrl+4" active={view === "settings"} onClick={() => setView("settings")} />
+          <NavItem icon={<BarChart3 />} label={t("nav.stats")} hint="Ctrl+2" active={view === "stats"} onClick={() => setView("stats")} />
+          <NavItem icon={<SlidersHorizontal />} label={t("nav.rules")} hint="Ctrl+3" active={view === "rules"} onClick={() => setView("rules")} count={ruleCount || undefined} />
+          <NavItem icon={<Network />} label={t("nav.network")} hint="Ctrl+4" active={view === "network"} onClick={() => setView("network")} />
+          <NavItem icon={<Settings />} label={t("nav.settings")} hint="Ctrl+5" active={view === "settings"} onClick={() => setView("settings")} />
         </nav>
         <div className="sidebar-footer">
           <div className="master-row">
@@ -180,6 +191,7 @@ function Shell() {
         )}
 
         {view === "activity" && <ActivityView filter={filter} selected={selected} onSelect={setSelected} />}
+        {view === "stats" && <StatsView onSelect={goToApp} />}
         {view === "rules" && <RulesView onSelect={goToApp} />}
         {view === "network" && <NetworkView onSelect={goToApp} />}
         {view === "settings" && <SettingsView />}

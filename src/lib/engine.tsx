@@ -11,6 +11,8 @@ interface EngineCtx {
   /** id -> app metadata from the latest tick (for chart tooltips). */
   appsById: Map<number, AppRate>;
   updateConfig: (mutate: (c: Config) => Config) => Promise<void>;
+  /** Adopt a config the backend already saved (profile switch, import). */
+  setConfigFromBackend: (c: Config) => void;
   refreshStatus: () => Promise<void>;
   error: string | null;
 }
@@ -89,6 +91,7 @@ export function EngineProvider({ children }: { children: React.ReactNode }) {
   }, [config]);
 
   const refreshStatus = useCallback(async () => setStatus(await api.status()), []);
+  const setConfigFromBackend = useCallback((c: Config) => setConfig(c), []);
 
   const appsById = useMemo(() => {
     const m = new Map<number, AppRate>();
@@ -97,8 +100,8 @@ export function EngineProvider({ children }: { children: React.ReactNode }) {
   }, [tick]);
 
   const value = useMemo<EngineCtx>(
-    () => ({ tick, history, config, status, appsById, updateConfig, refreshStatus, error }),
-    [tick, history, config, status, appsById, updateConfig, refreshStatus, error],
+    () => ({ tick, history, config, status, appsById, updateConfig, setConfigFromBackend, refreshStatus, error }),
+    [tick, history, config, status, appsById, updateConfig, setConfigFromBackend, refreshStatus, error],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }

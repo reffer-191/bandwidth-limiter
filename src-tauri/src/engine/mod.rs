@@ -2,6 +2,7 @@
 //! shaping scheduler and the once-per-second statistics ticker.
 
 pub mod adapters;
+pub mod effective;
 pub mod flows;
 pub mod packet;
 pub mod procinfo;
@@ -11,24 +12,30 @@ pub mod usage;
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
-use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant};
 
 use parking_lot::{Condvar, Mutex, MutexGuard, RwLock};
 use serde::Serialize;
 use tauri::{AppHandle, Emitter};
 
-use crate::config::{Config, Rule};
+use crate::clock::now_ms;
+use crate::config::Config;
+use crate::i18n::tr;
 use crate::windivert::{self as wd, Address, Handle, WinDivert};
 
 use adapters::AdapterInfo;
+use effective::States;
 use flows::{FlowKey, FlowTable};
-use shaper::{Bucket, Decision, Dir, Limits, QueueKey, QueuedPacket, Shaper};
+use shaper::{ConnMatcher, Decision, Dir, Limits, QueueKey, QueuedPacket, Shaper};
 use stats::{Bytes, Rate, Sample, Stats};
 
 pub type AppId = u32;
+
+/// WinDivert handle priority for the shaping layers (see `open_capture`).
+const CAPTURE_PRIORITY: i16 = 100;
 
 
 #[derive(Clone, Debug, Serialize)]
@@ -111,6 +118,9 @@ pub struct Status {
     pub forward_error: Option<String>,
     pub windivert_path: String,
     pub config_path: String,
+    /// Packets seen by the capture threads since start (diagnostics).
+    pub packets: u64,
+    pub last_error: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -143,6 +153,9 @@ pub struct Tick {
     pub queued_bytes: usize,
     pub dropped: u64,
     pub limiting: bool,
+    /// Schedule / quota state per rule (see `effective::States`).
+    pub states: States,
+    pub metered: bool,
 }
 
 pub struct State {
@@ -158,6 +171,18 @@ pub struct State {
     pub latest: Mutex<Option<Tick>>,
     pub icons: Mutex<HashMap<String, Option<String>>>,
     pub usage: Mutex<usage::UsageStore>,
+    /// Last rule states pushed into the shaper, with the config generation
+    /// they were computed from.
+    applied: Mutex<(u64, States)>,
+    config_gen: AtomicU64,
+    /// Set when something other than the config changed the effective rules
+    /// (adapter list, DNS answers, a rule's app showing up).
+    effective_dirty: AtomicBool,
+    /// Host name → resolved addresses for connection rules.
+    dns: Mutex<HashMap<String, Vec<packet::Addr16>>>,
+    dns_dirty: AtomicBool,
+    /// Apps first seen in this session, waiting for a notification.
+    new_apps: Mutex<Vec<AppId>>,
     /// network, forward, flow, socket
     handles: [AtomicPtr<c_void>; 4],
     running: AtomicBool,
@@ -168,19 +193,6 @@ pub struct Engine {
     pub app: AppHandle,
 }
 
-fn now_ms() -> u64 {
-    SystemTime::now().duration_since(UNIX_EPOCH).map(|d| d.as_millis() as u64).unwrap_or(0)
-}
-
-fn limits_from(rule: &Rule) -> Limits {
-    Limits {
-        down: rule.dl.enabled.then(|| Bucket::new(rule.dl.rate)),
-        up: rule.ul.enabled.then(|| Bucket::new(rule.ul.rate)),
-        block_down: rule.block_dl,
-        block_up: rule.block_ul,
-    }
-}
-
 impl Engine {
     pub fn start(app: AppHandle) -> Engine {
         unsafe {
@@ -189,6 +201,7 @@ impl Engine {
         }
         let mut config = Config::load();
         config.sanitize();
+        crate::clock::refresh_offset();
 
         let wd_result = WinDivert::get();
         let mut status = Status {
@@ -232,11 +245,17 @@ impl Engine {
             latest: Mutex::new(None),
             icons: Mutex::new(HashMap::new()),
             usage: Mutex::new(usage),
+            applied: Mutex::new((u64::MAX, States::new())),
+            config_gen: AtomicU64::new(0),
+            effective_dirty: AtomicBool::new(false),
+            dns: Mutex::new(HashMap::new()),
+            dns_dirty: AtomicBool::new(true),
+            new_apps: Mutex::new(Vec::new()),
             handles: std::array::from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
             running: AtomicBool::new(true),
         });
         let engine = Engine { state: state.clone(), app: app.clone() };
-        engine.apply_config(&config);
+        state.refresh_effective(&config, now_ms(), None);
 
         if let Some(w) = wd {
             engine.open_capture(w);
@@ -250,14 +269,21 @@ impl Engine {
             let s = state.clone();
             thread::Builder::new().name("bwl-tick".into()).spawn(move || ticker_loop(s, app)).unwrap();
         }
+        {
+            let s = state.clone();
+            thread::Builder::new().name("bwl-dns".into()).spawn(move || resolver_loop(s)).unwrap();
+        }
         engine
     }
 
     fn open_capture(&self, w: &'static WinDivert) {
         let s = &self.state;
         let lang = s.config.read().lang();
-        // Main network layer: everything except loopback.
-        match w.open("!loopback", wd::LAYER_NETWORK, 0, 0) {
+        // Main network layer: everything except loopback. A priority above
+        // the default 0 means we see packets before other WinDivert users
+        // (VPN clients, an older copy of this app) and they only get what we
+        // let through.
+        match w.open("!loopback", wd::LAYER_NETWORK, CAPTURE_PRIORITY, 0) {
             Ok(h) => {
                 let _ = w.set_param(h, wd::PARAM_QUEUE_LENGTH, 16384);
                 let _ = w.set_param(h, wd::PARAM_QUEUE_TIME, 4000);
@@ -274,7 +300,7 @@ impl Engine {
             }
         }
         // Forwarded packets (hotspot / ICS clients).
-        match w.open("true", wd::LAYER_NETWORK_FORWARD, 0, 0) {
+        match w.open("true", wd::LAYER_NETWORK_FORWARD, CAPTURE_PRIORITY, 0) {
             Ok(h) => {
                 let _ = w.set_param(h, wd::PARAM_QUEUE_LENGTH, 16384);
                 let _ = w.set_param(h, wd::PARAM_QUEUE_TIME, 4000);
@@ -301,37 +327,16 @@ impl Engine {
         }
     }
 
-    /// Pushes the configuration into the shaper. Rules for apps that have not
-    /// been seen yet are attached lazily when their first packet arrives.
-    pub fn apply_config(&self, cfg: &Config) {
-        let s = &self.state;
-        // Lock order everywhere is apps -> shaper (see build_tick), so resolve
-        // the ids first and release the apps table before touching the shaper.
-        let resolved: Vec<(AppId, Limits)> = {
-            let apps = s.apps.lock();
-            cfg.apps
-                .iter()
-                .filter(|(_, r)| r.rule.is_active())
-                .filter_map(|(key, r)| apps.by_key.get(key).map(|&id| (id, limits_from(&r.rule))))
-                .collect()
-        };
-        let mut sh = s.shaper.lock();
-        sh.master = cfg.master;
-        sh.global = limits_from(&cfg.global);
-        sh.global_internet_only = cfg.global_internet_only;
-        sh.hotspot = limits_from(&cfg.hotspot);
-        sh.apps = resolved.into_iter().collect();
-        drop(sh);
-        s.sched_cv.notify_one();
-    }
-
     pub fn set_config(&self, mut cfg: Config) -> Result<Config, String> {
         cfg.sanitize();
-        self.apply_config(&cfg);
-        *self.state.config.write() = cfg.clone();
-        cfg.save().map_err(|e| format!("{}: {e}", crate::i18n::tr(cfg.lang(), "cfg.save")))?;
+        let s = &self.state;
+        s.config_gen.fetch_add(1, Ordering::SeqCst);
+        s.dns_dirty.store(true, Ordering::SeqCst);
+        *s.config.write() = cfg.clone();
+        s.refresh_effective(&cfg, now_ms(), None);
+        cfg.save().map_err(|e| format!("{}: {e}", tr(cfg.lang(), "cfg.save")))?;
         // Keep every other surface (tray menu, UI) in sync.
-        crate::tray::sync(&self.app, cfg.master, cfg.lang());
+        crate::tray::sync(&self.app, &cfg);
         let _ = self.app.emit("config", &cfg);
         Ok(cfg)
     }
@@ -404,14 +409,22 @@ impl State {
             self.apps.lock().app_for_pid(pid)
         };
         if created {
-            self.attach_rule(app);
+            // Rules for this app (and connection rules restricted to it) get
+            // attached by the ticker; until then it is unshaped for < 1 s.
+            self.effective_dirty.store(true, Ordering::Relaxed);
+            self.new_apps.lock().push(app);
         }
 
         let len = pkt.len();
         self.stats.lock().counters.record(app, outbound, len, internet, forward);
 
-        let key = QueueKey { app, dir: if outbound { Dir::Up } else { Dir::Down }, forward, internet };
-        let decision = self.shaper.lock().admit(key, len, || QueuedPacket { data: pkt.to_vec(), addr, forward });
+        let decision = {
+            let mut sh = self.shaper.lock();
+            let conn = if sh.matchers.is_empty() { 0 } else { sh.match_conn(app, &remote, remote_port, p.protocol) };
+            let adapter = if forward || sh.if_map.is_empty() { 0 } else { sh.adapter_for(addr.if_idx()) };
+            let key = QueueKey { app, dir: if outbound { Dir::Up } else { Dir::Down }, forward, internet, conn, adapter };
+            sh.admit(key, len, || QueuedPacket { data: pkt.to_vec(), addr, forward })
+        };
         match decision {
             Decision::Pass => {
                 let _ = w.send(handle, pkt, &addr);
@@ -423,15 +436,131 @@ impl State {
         }
     }
 
-    /// A newly discovered app may already have a persisted rule.
-    fn attach_rule(&self, app: AppId) {
-        let key = self.apps.lock().list[app as usize].key.clone();
-        let rule = self.config.read().apps.get(&key).map(|r| r.rule.clone());
-        if let Some(rule) = rule {
-            if rule.is_active() {
-                self.shaper.lock().apps.insert(app, limits_from(&rule));
+    /// Recomputes what the shaper must enforce (schedules, quotas, adapter
+    /// and connection rules) and pushes it when it differs from what is
+    /// applied. `app` is the handle used for notifications (None at startup).
+    pub fn refresh_effective(&self, cfg: &Config, now: u64, app: Option<&AppHandle>) {
+        let gen = self.config_gen.load(Ordering::SeqCst);
+        let forced = self.effective_dirty.swap(false, Ordering::SeqCst);
+        let states = effective::compute(cfg, now, &self.usage.lock());
+        {
+            let applied = self.applied.lock();
+            if !forced && applied.0 == gen && applied.1 == states {
+                return;
             }
         }
+        // Lock order everywhere is apps -> usage -> shaper (see build_tick).
+        let (app_ids, conn_apps): (Vec<(AppId, Limits)>, Vec<Option<AppId>>) = {
+            let apps = self.apps.lock();
+            let ids = cfg
+                .apps
+                .iter()
+                .filter_map(|(key, r)| {
+                    let id = *apps.by_key.get(key)?;
+                    Some((id, effective::limits_for(&r.rule, &states[key])))
+                })
+                .collect();
+            let conn_apps = cfg
+                .connections
+                .iter()
+                .map(|c| if c.app.is_empty() { None } else { Some(apps.by_key.get(&c.app).copied().unwrap_or(AppId::MAX)) })
+                .collect();
+            (ids, conn_apps)
+        };
+        // Connection rules: skip disabled ones; a rule scoped to an app that
+        // has not shown up yet gets AppId::MAX, which never matches.
+        let dns = self.dns.lock();
+        let mut conns = Vec::new();
+        let mut matchers = Vec::new();
+        for (c, app_id) in cfg.connections.iter().zip(conn_apps) {
+            if !c.enabled || conns.len() >= 250 {
+                continue;
+            }
+            let st = &states[&format!("conn:{}", c.id)];
+            let mut nets = Vec::new();
+            let any_host = c.host.is_empty();
+            if let Some(n) = effective::parse_net(&c.host) {
+                nets.push(n);
+            } else if !any_host {
+                if let Some(ips) = dns.get(&c.host.to_lowercase()) {
+                    nets.extend(ips.iter().map(|ip| (*ip, if packet::is_v4(ip) { 32 } else { 128 })));
+                }
+            }
+            conns.push(effective::limits_for(&c.rule, st));
+            matchers.push(ConnMatcher {
+                app: app_id,
+                any_host,
+                nets,
+                ports: effective::parse_ports(&c.ports),
+                protocol: match c.protocol.as_str() {
+                    "tcp" => packet::PROTO_TCP,
+                    "udp" => packet::PROTO_UDP,
+                    _ => 0,
+                },
+            });
+        }
+        drop(dns);
+        // Adapter rules: interface index → first enabled rule that matches.
+        let info = self.adapters.read();
+        let mut adapter_limits = Vec::new();
+        let mut if_map = HashMap::new();
+        for a in cfg.adapters.iter().filter(|a| a.enabled) {
+            let st = &states[&format!("adapter:{}", a.id)];
+            adapter_limits.push(effective::limits_for(&a.rule, st));
+            let idx = adapter_limits.len() as u8;
+            for ad in &info.adapters {
+                let hit = match a.adapter.as_str() {
+                    "wifi" | "ethernet" => ad.kind == a.adapter,
+                    "metered" => info.metered,
+                    other => other.strip_prefix("name:").map(|n| n == ad.name).unwrap_or(false),
+                };
+                if hit {
+                    if_map.entry(ad.if_index).or_insert(idx);
+                    if ad.ipv6_if_index != 0 {
+                        if_map.entry(ad.ipv6_if_index).or_insert(idx);
+                    }
+                }
+            }
+            if adapter_limits.len() >= 250 {
+                break;
+            }
+        }
+        drop(info);
+
+        let mut sh = self.shaper.lock();
+        sh.master = cfg.master;
+        sh.global = effective::limits_for(&cfg.global, &states["global"]);
+        sh.global_internet_only = cfg.global_internet_only;
+        sh.hotspot = effective::limits_for(&cfg.hotspot, &states["hotspot"]);
+        sh.apps = app_ids.into_iter().collect();
+        sh.conns = conns;
+        sh.matchers = matchers;
+        sh.adapters = adapter_limits;
+        sh.if_map = if_map;
+        drop(sh);
+        self.sched_cv.notify_one();
+
+        // Notifications for what just changed.
+        let mut applied = self.applied.lock();
+        if let Some(app) = app {
+            let lang = cfg.lang();
+            for (key, st) in &states {
+                let Some(prev) = applied.1.get(key) else { continue };
+                let (label, rule) = rule_label(cfg, key, lang);
+                let Some(rule) = rule else { continue };
+                if cfg.notify_schedule && rule.schedule.enabled && prev.active != st.active {
+                    let body = tr(lang, if st.active { "notif.schedule.on" } else { "notif.schedule.off" });
+                    crate::notify::show(app, &label, body);
+                }
+                if cfg.notify_quota && rule.quota.enabled && !prev.quota_exceeded && st.quota_exceeded {
+                    let body = tr(lang, if rule.quota.action == "block" { "notif.quota.block" } else { "notif.quota.notify" })
+                        .replace("{used}", &fmt_bytes(st.quota_used))
+                        .replace("{quota}", &fmt_bytes(rule.quota.bytes));
+                    crate::notify::show(app, &format!("{} · {label}", tr(lang, "notif.quota")), &body);
+                }
+            }
+        }
+        *applied = (gen, states);
     }
 
     pub fn app_exe(&self, key: &str) -> Option<String> {
@@ -445,19 +574,28 @@ fn recv_loop(state: Arc<State>, handle: Handle, forward: bool) {
     let w = state.wd.unwrap();
     let mut buf = vec![0u8; wd::MTU_MAX];
     let mut addr = Address::default();
+    let mut n: u64 = 0;
     while state.running.load(Ordering::Relaxed) {
         match w.recv(handle, &mut buf, &mut addr) {
-            Ok(len) => state.handle_packet(handle, forward, &buf[..len], addr),
+            Ok(len) => {
+                n += 1;
+                if n % 64 == 0 {
+                    state.status.lock().packets += 64;
+                }
+                state.handle_packet(handle, forward, &buf[..len], addr)
+            }
             Err(e) => match e.raw_os_error() {
                 // ERROR_NO_DATA (shutdown) / ERROR_OPERATION_ABORTED / INVALID_HANDLE
                 Some(232) | Some(995) | Some(6) => break,
                 _ => {
                     log::warn!("recv: {e}");
+                    state.status.lock().last_error = Some(format!("recv: {e}"));
                     thread::sleep(Duration::from_millis(5));
                 }
             },
         }
     }
+    state.status.lock().last_error = Some(format!("capture thread ended (forward={forward})"));
 }
 
 fn event_loop(state: Arc<State>, handle: Handle, layer: u32) {
@@ -546,7 +684,9 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
         if n % 15 == 0 {
             let info = adapters::enumerate();
             *state.adapters.write() = info;
+            state.effective_dirty.store(true, Ordering::Relaxed);
         }
+        crate::clock::refresh_offset();
 
         let ts = now_ms();
         let (sample, per_app) = state.stats.lock().tick(ts, secs);
@@ -570,6 +710,25 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
                 }
             }
         }
+        // Schedules, quotas and freshly seen apps.
+        let cfg = state.config.read().clone();
+        state.refresh_effective(&cfg, ts, Some(&app));
+        let fresh: Vec<AppId> = std::mem::take(&mut *state.new_apps.lock());
+        if cfg.notify_new_app && !fresh.is_empty() {
+            let apps = state.apps.lock();
+            let lang = cfg.lang();
+            for id in fresh {
+                if let Some(m) = apps.list.get(id as usize) {
+                    if m.key == "unknown" || m.key == "system" {
+                        continue;
+                    }
+                    let title = tr(lang, if m.is_device { "notif.newDevice" } else { "notif.newApp" });
+                    let body = if m.description.is_empty() || m.is_device { m.name.clone() } else { format!("{} — {}", m.name, m.description) };
+                    crate::notify::show(&app, title, &body);
+                }
+            }
+        }
+
         let tick = build_tick(&state, &sample, &per_app);
         *state.latest.lock() = Some(tick.clone());
         let _ = app.emit("tick", &tick);
@@ -590,6 +749,41 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
             ));
         }
     }
+}
+
+/// Human label + rule for a state key ("global", app key, "conn:id"…).
+fn rule_label<'a>(cfg: &'a Config, key: &str, lang: crate::i18n::Lang) -> (String, Option<&'a crate::config::Rule>) {
+    if key == "global" {
+        return (tr(lang, "rule.pc").into(), Some(&cfg.global));
+    }
+    if key == "hotspot" {
+        return (tr(lang, "rule.hotspot").into(), Some(&cfg.hotspot));
+    }
+    if let Some(id) = key.strip_prefix("conn:") {
+        return cfg
+            .connections
+            .iter()
+            .find(|c| c.id == id)
+            .map(|c| (if c.name.is_empty() { c.host.clone() } else { c.name.clone() }, Some(&c.rule)))
+            .unwrap_or((key.into(), None));
+    }
+    if let Some(id) = key.strip_prefix("adapter:") {
+        return cfg
+            .adapters
+            .iter()
+            .find(|a| a.id == id)
+            .map(|a| (a.adapter.trim_start_matches("name:").to_string(), Some(&a.rule)))
+            .unwrap_or((key.into(), None));
+    }
+    cfg.apps.get(key).map(|a| (a.name.clone(), Some(&a.rule))).unwrap_or((key.into(), None))
+}
+
+pub fn fmt_bytes(b: u64) -> String {
+    let v = b as f64;
+    if v < 1024.0 { format!("{b} B") }
+    else if v < 1024.0 * 1024.0 { format!("{:.1} KB", v / 1024.0) }
+    else if v < 1024.0 * 1024.0 * 1024.0 { format!("{:.1} MB", v / 1024.0 / 1024.0) }
+    else { format!("{:.2} GB", v / 1024.0 / 1024.0 / 1024.0) }
 }
 
 fn fmt_rate(bytes_per_sec: f64, units: &str) -> String {
@@ -614,6 +808,8 @@ fn build_tick(state: &State, sample: &Sample, per_app: &HashMap<AppId, (Rate, By
         let sh = state.shaper.lock();
         (sh.queued_bytes, sh.dropped, sh.has_any_limit())
     };
+    let states = state.applied.lock().1.clone();
+    let metered = state.adapters.read().metered;
     let list = apps
         .list
         .iter()
@@ -646,5 +842,64 @@ fn build_tick(state: &State, sample: &Sample, per_app: &HashMap<AppId, (Rate, By
         queued_bytes,
         dropped,
         limiting,
+        states,
+        metered,
     }
 }
+
+/// Resolves the host names used by connection rules (every 5 minutes and
+/// whenever the rules change) so the matchers can compare addresses.
+fn resolver_loop(state: Arc<State>) {
+    use std::net::ToSocketAddrs;
+    let mut last = Instant::now() - Duration::from_secs(3600);
+    while state.running.load(Ordering::Relaxed) {
+        thread::sleep(Duration::from_millis(1000));
+        let due = last.elapsed() > Duration::from_secs(300);
+        if !due && !state.dns_dirty.swap(false, Ordering::SeqCst) {
+            continue;
+        }
+        last = Instant::now();
+        let hosts: Vec<String> = state
+            .config
+            .read()
+            .connections
+            .iter()
+            .filter(|c| c.enabled && effective::is_hostname(&c.host))
+            .map(|c| c.host.to_lowercase())
+            .collect();
+        if hosts.is_empty() {
+            let mut dns = state.dns.lock();
+            if !dns.is_empty() {
+                dns.clear();
+            }
+            continue;
+        }
+        let mut changed = false;
+        for host in hosts {
+            let ips: Vec<packet::Addr16> = (host.as_str(), 0)
+                .to_socket_addrs()
+                .map(|it| {
+                    it.map(|sa| match sa.ip() {
+                        std::net::IpAddr::V4(v4) => packet::map_ipv4(&v4.octets()),
+                        std::net::IpAddr::V6(v6) => v6.octets(),
+                    })
+                    .collect()
+                })
+                .unwrap_or_default();
+            let mut dns = state.dns.lock();
+            if ips.is_empty() {
+                // Keep the previous answer on a transient failure.
+                dns.entry(host).or_default();
+                continue;
+            }
+            if dns.get(&host).map(|old| *old != ips).unwrap_or(true) {
+                dns.insert(host, ips);
+                changed = true;
+            }
+        }
+        if changed {
+            state.effective_dirty.store(true, Ordering::SeqCst);
+        }
+    }
+}
+
