@@ -104,6 +104,9 @@ const es = {
   "rule.block": "Bloquear",
   "rule.in": "entrada",
   "rule.out": "salida",
+  "rule.blocked": "bloqueado",
+  "rule.effective": "Límite efectivo",
+  "rule.tooLow": "Demasiado bajo: por debajo de {min} la conexión queda inutilizable. El motor aplicará {min} como mínimo.",
 
   // rules view
   "rules.general": "Límites generales",
@@ -296,6 +299,9 @@ const en: Record<Key, string> = {
   "rule.block": "Block",
   "rule.in": "incoming",
   "rule.out": "outgoing",
+  "rule.blocked": "blocked",
+  "rule.effective": "Effective limit",
+  "rule.tooLow": "Too low: below {min} the connection becomes unusable. The engine will apply {min} as the minimum.",
 
   "rules.general": "General limits",
   "rules.pc": "Whole computer",
@@ -401,7 +407,7 @@ export type T = (key: Key, vars?: Record<string, string | number>) => string;
 
 export function translate(lang: Lang, key: Key, vars?: Record<string, string | number>): string {
   let s: string = dicts[lang][key] ?? dicts.es[key] ?? key;
-  if (vars) for (const [k, v] of Object.entries(vars)) s = s.replace(`{${k}}`, String(v));
+  if (vars) for (const [k, v] of Object.entries(vars)) s = s.split(`{${k}}`).join(String(v));
   return s;
 }
 

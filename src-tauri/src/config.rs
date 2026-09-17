@@ -6,6 +6,10 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
+/// Lowest rates the engine accepts (bytes/s). Mirrored in RuleEditor.tsx.
+pub const MIN_RATE_GENERAL: u64 = 16_000;
+pub const MIN_RATE_APP: u64 = 1_000;
+
 #[derive(Serialize, Deserialize, Clone, Debug, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Limit {
@@ -136,18 +140,24 @@ impl Config {
         }
         self.apps.retain(|_, r| r.rule.is_active());
         // A limit of 0 B/s would be a block in disguise; treat it as 1 Mbit/s.
-        let fix = |l: &mut Limit| {
+        // Below a few KB/s TCP acknowledgements starve and the connection is
+        // effectively dead, so general limits are floored at 128 kbit/s and
+        // per-app limits at 8 kbit/s (blocking is an explicit switch instead).
+        let fix = |l: &mut Limit, min: u64| {
             if l.enabled && l.rate == 0 {
                 l.rate = 125_000;
             }
+            if l.enabled && l.rate < min {
+                l.rate = min;
+            }
         };
-        fix(&mut self.global.dl);
-        fix(&mut self.global.ul);
-        fix(&mut self.hotspot.dl);
-        fix(&mut self.hotspot.ul);
+        fix(&mut self.global.dl, MIN_RATE_GENERAL);
+        fix(&mut self.global.ul, MIN_RATE_GENERAL);
+        fix(&mut self.hotspot.dl, MIN_RATE_GENERAL);
+        fix(&mut self.hotspot.ul, MIN_RATE_GENERAL);
         for r in self.apps.values_mut() {
-            fix(&mut r.rule.dl);
-            fix(&mut r.rule.ul);
+            fix(&mut r.rule.dl, MIN_RATE_APP);
+            fix(&mut r.rule.ul, MIN_RATE_APP);
         }
     }
 }

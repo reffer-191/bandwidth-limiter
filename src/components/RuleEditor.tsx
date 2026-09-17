@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { ArrowDown, ArrowUp } from "lucide-react";
 import type { Limit, Rule } from "../lib/api";
-import { unitOptions, type Units } from "../lib/format";
+import { formatRate, unitOptions, type Units } from "../lib/format";
 import { useT } from "../lib/i18n";
 import { Switch } from "./ui";
 
@@ -10,10 +10,12 @@ function RateField({
   limit,
   units,
   onChange,
+  warn = false,
 }: {
   limit: Limit;
   units: Units;
   onChange: (l: Limit) => void;
+  warn?: boolean;
 }) {
   const opts = unitOptions(units);
   const pick = (rate: number) => {
@@ -39,7 +41,7 @@ function RateField({
   };
 
   return (
-    <div className="field">
+    <div className={`field ${warn ? "warn" : ""}`}>
       <input
         type="number"
         min={0}
@@ -75,7 +77,11 @@ function fmt(n: number) {
 }
 
 const DEFAULT_DL = 125_000; // 1 Mbit/s
-const DEFAULT_UL = 62_500; // 500 kbit/s
+const DEFAULT_UL = 125_000; // 1 Mbit/s — same unit as download so a typed number means the same thing in both rows
+
+/** Below these rates a limit turns into a de-facto block (ACKs starve). */
+export const MIN_RATE_GENERAL = 16_000; // 128 kbit/s for the whole PC / hotspot
+export const MIN_RATE_APP = 1_000; // 8 kbit/s for a single app
 
 /** Enabling a limit whose rate is still 0 would block everything; seed it. */
 function enable(l: Limit, v: boolean, fallback: number): Limit {
@@ -87,13 +93,21 @@ export function RuleEditor({
   units,
   onChange,
   showBlock = true,
+  minRate = MIN_RATE_APP,
 }: {
   rule: Rule;
   units: Units;
   onChange: (r: Rule) => void;
   showBlock?: boolean;
+  /** Rates below this are refused by the engine; the editor warns about them. */
+  minRate?: number;
 }) {
   const t = useT();
+  const low = (l: Limit) => l.enabled && l.rate < minRate;
+  const summary = [
+    rule.blockDl ? `↓ ${t("rule.blocked")}` : rule.dl.enabled ? `↓ ${formatRate(rule.dl.rate, units)}` : null,
+    rule.blockUl ? `↑ ${t("rule.blocked")}` : rule.ul.enabled ? `↑ ${formatRate(rule.ul.rate, units)}` : null,
+  ].filter(Boolean);
   return (
     <div className="rule-editor">
       <div className="rule-row">
@@ -101,15 +115,22 @@ export function RuleEditor({
         <span className="name dl">
           <ArrowDown /> {t("download")}
         </span>
-        <RateField limit={rule.dl} units={units} onChange={(dl) => onChange({ ...rule, dl })} />
+        <RateField limit={rule.dl} units={units} onChange={(dl) => onChange({ ...rule, dl })} warn={low(rule.dl)} />
       </div>
       <div className="rule-row">
         <Switch label={t("upload")} on={rule.ul.enabled} onChange={(v) => onChange({ ...rule, ul: enable(rule.ul, v, DEFAULT_UL) })} />
         <span className="name ul">
           <ArrowUp /> {t("upload")}
         </span>
-        <RateField limit={rule.ul} units={units} onChange={(ul) => onChange({ ...rule, ul })} />
+        <RateField limit={rule.ul} units={units} onChange={(ul) => onChange({ ...rule, ul })} warn={low(rule.ul)} />
       </div>
+      {(summary.length > 0 || low(rule.dl) || low(rule.ul)) && (
+        <div className={`rule-summary ${low(rule.dl) || low(rule.ul) ? "warn" : ""}`}>
+          {low(rule.dl) || low(rule.ul)
+            ? t("rule.tooLow", { min: formatRate(minRate, units) })
+            : `${t("rule.effective")}: ${summary.join(" · ")}`}
+        </div>
+      )}
       {showBlock && (
         <div className="rule-block">
           <span>{t("rule.block")}</span>

@@ -3,7 +3,7 @@ import { ruleActive, type Rule } from "../lib/api";
 import { useEngine } from "../lib/engine";
 import type { Units } from "../lib/format";
 import { useT } from "../lib/i18n";
-import { RuleEditor } from "./RuleEditor";
+import { MIN_RATE_GENERAL, RuleEditor } from "./RuleEditor";
 import { AppIcon, Switch, appDescription, appName } from "./ui";
 
 export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
@@ -35,7 +35,7 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
               </div>
             </div>
           </div>
-          <RuleEditor rule={config.global} units={units} onChange={setGlobal} />
+          <RuleEditor rule={config.global} units={units} onChange={setGlobal} minRate={MIN_RATE_GENERAL} />
         </div>
 
         <div className="card rule-card">
@@ -53,7 +53,7 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
               )}
             </div>
           </div>
-          <RuleEditor rule={config.hotspot} units={units} onChange={setHotspot} />
+          <RuleEditor rule={config.hotspot} units={units} onChange={setHotspot} minRate={MIN_RATE_GENERAL} />
         </div>
 
         <div className="section-title">{t("rules.appsAndDevices")} · {appRules.length}</div>
