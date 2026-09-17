@@ -158,7 +158,7 @@ function Shell() {
               <Download />
               <div style={{ flex: 1 }}>
                 <b>{t("update.available", { version: update.version })}</b> {t("update.current", { current: update.current })}
-                {update.notes && <span className="muted"> {update.notes.split("\n")[0].slice(0, 160)}</span>}
+                {summarizeNotes(update.notes) && <span className="muted"> {summarizeNotes(update.notes)}</span>}
               </div>
               <button className="btn primary" disabled={installing} onClick={async () => { setInstalling(true); try { await api.installUpdate(); } catch { setInstalling(false); } }}>
                 {installing ? t("update.installing") : t("update.install")}
@@ -188,6 +188,22 @@ function Shell() {
       {config && !config.onboardingDone && <Onboarding onDone={() => updateConfig((c) => ({ ...c, onboardingDone: true }))} />}
     </div>
   );
+}
+
+/** First real sentence of the release notes, without Markdown scaffolding. */
+function summarizeNotes(notes: string | null): string {
+  if (!notes) return "";
+  for (const raw of notes.split("\n")) {
+    const line = raw
+      .replace(/^\s*#{1,6}\s*/, "") // headings
+      .replace(/^\s*[-*+]\s+/, "") // list markers
+      .replace(/[*_`]/g, "") // emphasis / code
+      .replace(/\[([^\]]+)\]\([^)]*\)/g, "$1") // links
+      .trim();
+    // Skip empty lines and heading-only lines such as "Added" / "Fixed".
+    if (line.length > 20) return line.length > 160 ? line.slice(0, 157) + "…" : line;
+  }
+  return "";
 }
 
 function NavItem({ icon, label, hint, active, onClick, count }: { icon: React.ReactNode; label: string; hint?: string; active: boolean; onClick: () => void; count?: number }) {

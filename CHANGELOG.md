@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-09-17
+
+### Fixed
+- The update banner showed raw Markdown from the release notes ("### Fixed"); it now shows the first sentence in plain text.
+- The unit dropdown (kbit/s / Mbit/s) was unreadable in the dark theme: native controls now follow the app theme.
+
 ## [0.6.1] - 2026-09-17
 
 ### Fixed
@@ -51,7 +57,8 @@ All notable changes to this project are documented here. The format follows [Kee
 ### Added
 - First working version: live per-process traffic, per-app / global / hotspot limits and blocking, history chart with per-app breakdown, connections and adapters views, light/dark theme.
 
-[Unreleased]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.6.1...HEAD
+[Unreleased]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.6.2...HEAD
+[0.6.2]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.6.1...v0.6.2
 [0.6.1]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.6.0...v0.6.1
 [0.6.0]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.5.0...v0.6.0
 [0.5.0]: https://github.com/reffer-191/bandwidth-limiter/compare/v0.4.0...v0.5.0
