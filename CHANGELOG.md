@@ -32,7 +32,7 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ### Added
 - In-app updates: the app checks the GitHub releases at startup (configurable) and from *Settings → Updates*, and installs signed updates with one click.
-- Continuous integration: every push and pull request is type-checked, built and tested; every `v*` tag builds, signs and publishes the release automatically (installer, offline installer, portable zip and updater feed).
+- Continuous integration: every push and pull request is type-checked, built and tested. (Releases were published by CI from 0.5.0 to 0.6.1; since 0.6.2 they are built and published from the maintainer's machine with `npm run release`.)
 - This changelog.
 
 ### Changed

@@ -9,7 +9,9 @@
     "preview": "vite preview",
     "tauri": "tauri",
     "dist": "python scripts/build_local.py",
-    "fetch": "python scripts/fetch_release.py"
+    "fetch": "python scripts/fetch_release.py",
+    "publish": "python scripts/publish.py",
+    "release": "python scripts/build_local.py && python scripts/publish.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

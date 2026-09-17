@@ -117,19 +117,21 @@ Prerequisites: [Node.js](https://nodejs.org) 20+, [Rust](https://rustup.rs) (sta
 ```bash
 npm install
 npm run tauri dev          # development build (self-elevates through UAC)
-npm run tauri build        # release build + NSIS installer (downloads the WebView2 offline installer once)
+npm run tauri build        # release build + NSIS installer
 python scripts/portable.py # portable zip from the release build
 ```
 
-Releases are built by GitHub Actions: pushing a tag `vX.Y.Z` compiles, signs and publishes the installer, the offline installer, the portable zip and the updater feed (`latest.json`), using the `CHANGELOG.md` entry as release notes. The repository secrets hold the code-signing certificate (`WINDOWS_CERT_PFX_B64`, `WINDOWS_CERT_PASSWORD`) and the updater key (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
-
-Quick local testing:
+Releases are built and published from the maintainer's machine (GitHub Actions only runs the checks on every push):
 
 ```bash
-npm run fetch            # download the installer + portable of the latest release into dist-local/<tag>/
-npm run fetch -- v0.6.2  # a specific version
-npm run dist             # build installer + portable on this PC into dist-local/v<version>/
+npm run dist             # build + sign the installer and the portable zip into dist-local/v<version>/
+npm run publish          # create the GitHub release for that version: installer, .sig, portable, latest.json, notes from CHANGELOG.md
+npm run release          # both steps in one go
+npm run publish -- --offline   # additionally build and upload the offline installer (~210 MB)
+npm run fetch -- v0.6.2  # download the published files of a version into dist-local/<tag>/
 ```
+
+`npm run dist` signs with the certificate in the Windows certificate store (see `scripts/sign.ps1`) and, when present, the updater key in `%USERPROFILE%\.bandwidth-limiter-signing`.
 
 Handy while developing:
 
