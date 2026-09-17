@@ -7,7 +7,9 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "tauri": "tauri"
+    "tauri": "tauri",
+    "dist": "python scripts/build_local.py",
+    "fetch": "python scripts/fetch_release.py"
   },
   "dependencies": {
     "@tauri-apps/api": "^2",

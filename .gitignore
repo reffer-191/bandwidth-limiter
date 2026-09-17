@@ -2,6 +2,7 @@ node_modules/
 dist/
 dist-portable/
 dist-installer/
+dist-local/
 src-tauri/target/
 src-tauri/gen/schemas/
 *.log

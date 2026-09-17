@@ -123,6 +123,14 @@ python scripts/portable.py # zip portable a partir de la build release
 
 Las releases las genera GitHub Actions: al subir una etiqueta `vX.Y.Z` compila, firma y publica el instalador, el instalador offline, el zip portable y la fuente de actualizaciones (`latest.json`), usando la entrada de `CHANGELOG.md` como notas de la versión. Los secretos del repositorio guardan el certificado de firma (`WINDOWS_CERT_PFX_B64`, `WINDOWS_CERT_PASSWORD`) y la clave del updater (`TAURI_SIGNING_PRIVATE_KEY`, `TAURI_SIGNING_PRIVATE_KEY_PASSWORD`).
 
+Pruebas rápidas en local:
+
+```bash
+npm run fetch            # descarga instalador + portable de la última release a dist-local/<tag>/
+npm run fetch -- v0.6.2  # una versión concreta
+npm run dist             # compila instalador + portable en este PC en dist-local/v<versión>/
+```
+
 Útil durante el desarrollo:
 
 - `npm run dev` y abre http://localhost:1420 en un navegador: la UI funciona contra un backend simulado (`src/lib/mock.ts`), sin driver ni permisos de administrador. Añade `#rules` o `#settings` a la URL para abrir una vista concreta.
