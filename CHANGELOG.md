@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.1] - 2026-09-17
+
+### Fixed
+- Toast notifications did not appear: Windows only shows toasts from unpackaged apps that have a Start Menu shortcut carrying their AppUserModelID. The app now sets that property on the installer's shortcut (or creates a per-user one for the portable edition) the first time it needs to notify, and *Settings → Notifications → Test* shows the error when a toast cannot be sent.
+
 ## [0.7.0] - 2026-09-17
 
 ### Added

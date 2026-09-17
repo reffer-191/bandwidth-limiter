@@ -25,6 +25,7 @@ pub fn run() {
         return;
     }
 
+    notify::set_process_aumid();
     let builder = tauri::Builder::default();
     // A second launch just brings the running instance back. Release only, so a
     // dev build can run side by side with an installed/portable copy.
@@ -85,7 +86,6 @@ pub fn run() {
                 (cfg.start_minimized, cfg.minimize_to_tray, cfg.clone())
             };
             tray::setup(app.handle(), &cfg)?;
-            notify::register();
             if app.state::<engine::Engine>().state.config.read().check_updates {
                 update::check_on_startup(app.handle().clone());
             }

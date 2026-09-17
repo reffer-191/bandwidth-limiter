@@ -30,6 +30,7 @@ export function SettingsView() {
   const [autostart, setAutostart] = useState<boolean | null>(null);
   const [autostartError, setAutostartError] = useState<string | null>(null);
   const [licenses, setLicenses] = useState(false);
+  const [notifyError, setNotifyError] = useState<string | null>(null);
   const [updateState, setUpdateState] = useState<{ status: "idle" | "checking" | "none" | "available" | "installing" | "error"; info?: UpdateInfo; error?: string }>({ status: "idle" });
 
   const checkNow = async () => {
@@ -158,9 +159,9 @@ export function SettingsView() {
           <Row title={t("set.notify.quota")} desc={t("set.notify.quota.desc")}>
             <Switch label={t("set.notify.quota")} on={config.notifyQuota} onChange={(notifyQuota) => updateConfig((c) => ({ ...c, notifyQuota }))} />
           </Row>
-          <Row title={t("set.notify.schedule")} desc={t("set.notify.schedule.desc")}>
+          <Row title={t("set.notify.schedule")} desc={<>{t("set.notify.schedule.desc")}{notifyError && <span style={{ color: "var(--red)" }}> {notifyError}</span>}</>}>
             <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <button className="btn ghost" onClick={() => api.testNotification().catch(() => {})}>{t("set.notify.test")}</button>
+              <button className="btn ghost" onClick={() => { setNotifyError(null); api.testNotification().catch((e) => setNotifyError(String(e))); }}>{t("set.notify.test")}</button>
               <Switch label={t("set.notify.schedule")} on={config.notifySchedule} onChange={(notifySchedule) => updateConfig((c) => ({ ...c, notifySchedule }))} />
             </div>
           </Row>
