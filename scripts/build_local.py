@@ -33,7 +33,7 @@ subprocess.run(["python", "scripts/portable.py"], check=True)
 
 out = os.path.join(root, "dist-local", f"v{version}")
 os.makedirs(out, exist_ok=True)
-for f in glob.glob("src-tauri/target/release/bundle/nsis/*setup.exe*") + glob.glob(f"dist-portable/BandwidthLimiter-{version}-portable.zip"):
+for f in glob.glob(f"src-tauri/target/release/bundle/nsis/*_{version}_x64-setup.exe*") + glob.glob(f"dist-portable/BandwidthLimiter-{version}-portable.zip"):
     shutil.copy2(f, out)
 print(f"\nv{version} ->", out)
 for f in sorted(os.listdir(out)):
