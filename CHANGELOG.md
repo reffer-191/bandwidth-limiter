@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.7.2] - 2026-09-18
+
+### Changed
+- Traffic is now counted when the limiter delivers a packet, not when it arrives from the network, and dropped packets are not counted. The chart, the per-app speeds and the quotas therefore show what actually gets through: with a 2 Mbit/s computer limit the curve no longer spikes above 2 Mbit/s while TCP adapts to the limit.
+
 ## [0.7.1] - 2026-09-17
 
 ### Fixed

@@ -416,17 +416,19 @@ impl State {
         }
 
         let len = pkt.len();
-        self.stats.lock().counters.record(app, outbound, len, internet, forward);
-
         let decision = {
             let mut sh = self.shaper.lock();
             let conn = if sh.matchers.is_empty() { 0 } else { sh.match_conn(app, &remote, remote_port, p.protocol) };
             let adapter = if forward || sh.if_map.is_empty() { 0 } else { sh.adapter_for(addr.if_idx()) };
             let key = QueueKey { app, dir: if outbound { Dir::Up } else { Dir::Down }, forward, internet, conn, adapter };
-            sh.admit(key, len, || QueuedPacket { data: pkt.to_vec(), addr, forward })
+            sh.admit(key, len, || QueuedPacket { data: pkt.to_vec(), addr, forward, app, outbound, internet })
         };
+        // Traffic is accounted when it is delivered (here, or by the
+        // scheduler for queued packets), never when it is dropped, so the
+        // chart and the quotas reflect what the limiter lets through.
         match decision {
             Decision::Pass => {
+                self.stats.lock().counters.record(app, outbound, len, internet, forward);
                 let _ = w.send(handle, pkt, &addr);
             }
             Decision::Drop => {}
@@ -656,9 +658,11 @@ fn scheduler_loop(state: Arc<State>) {
             state.sched_cv.wait_for(&mut guard, wait);
         } else {
             MutexGuard::unlocked(&mut guard, || {
+                let mut stats = state.stats.lock();
                 for p in out.drain(..) {
                     let h = state.handles[p.forward as usize].load(Ordering::Relaxed);
                     if !h.is_null() {
+                        stats.counters.record(p.app, p.outbound, p.data.len(), p.internet, p.forward);
                         let _ = w.send(h, &p.data, &p.addr);
                     }
                 }

@@ -185,6 +185,8 @@ npm run fetch -- v0.6.2  # descarga los ficheros publicados de una versión a di
 
 **Los límites parecen un ~5 % más bajos de lo configurado.** Se aplican a nivel de paquete, cabeceras TCP/IP incluidas, mientras que los gestores de descargas cuentan solo los datos útiles.
 
+**La gráfica muestra menos de lo que llega a mi tarjeta de red.** Velocidades y totales cuentan los paquetes que el limitador entrega; lo que descarta mientras TCP se adapta a un límite no se cuenta, así que la curva nunca supera un límite activo (el tráfico local excluido por *Solo tráfico de Internet* sí se muestra, claro).
+
 **¿Por qué el certificado es autofirmado?** Los certificados que Windows reconoce cuestan dinero cada año. Para quitar el aviso de SmartScreen se puede solicitar la firma gratuita de [SignPath Foundation](https://signpath.org/) (para proyectos de código abierto) o comprar un certificado OV/EV; la build ya admite cualquier certificado a través de `scripts/sign.ps1`.
 
 **¿Limita a los dispositivos de mi hotspot?** Sí: el tráfico reenviado a los dispositivos conectados al punto de acceso móvil de Windows también se captura, aparece como una fila de dispositivo y está sujeto al límite del hotspot y al límite global.

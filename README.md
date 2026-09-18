@@ -183,6 +183,8 @@ Handy while developing:
 
 **Some traffic shows as "Unknown".** The first packets of a brand-new connection can arrive before Windows reports which process owns it. The amount is usually tiny.
 
+**The chart shows less than what arrives at my network card.** Speeds and totals count the packets the limiter delivers; what it drops while TCP adapts to a limit is not counted, so the curve never exceeds an active limit (local traffic excluded by *Internet traffic only* is still shown, of course).
+
 **Limits look ~5 % lower than configured.** Limits are enforced on the wire, including TCP/IP headers, while download managers report payload only.
 
 **Why is the certificate self-signed?** Certificates trusted by Windows cost money every year. Projects that want to remove the SmartScreen warning can apply to [SignPath Foundation](https://signpath.org/) (free signing for open-source projects) or buy an OV/EV certificate; the build already supports any certificate through `scripts/sign.ps1`.

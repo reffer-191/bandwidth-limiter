@@ -159,6 +159,11 @@ pub struct QueuedPacket {
     pub data: Vec<u8>,
     pub addr: Address,
     pub forward: bool,
+    /// Accounting metadata: bytes are counted when the packet is actually
+    /// sent, so the chart shows what gets through the limiter.
+    pub app: AppId,
+    pub outbound: bool,
+    pub internet: bool,
 }
 
 #[derive(Default)]
@@ -508,7 +513,7 @@ mod tests {
     }
 
     fn pkt(len: usize) -> QueuedPacket {
-        QueuedPacket { data: vec![0; len], addr: Address::default(), forward: false }
+        QueuedPacket { data: vec![0; len], addr: Address::default(), forward: false, app: 0, outbound: false, internet: true }
     }
 
     fn drain(s: &mut Shaper, out: &mut Vec<QueuedPacket>) {

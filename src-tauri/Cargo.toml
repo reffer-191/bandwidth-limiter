@@ -1,6 +1,6 @@
 [package]
 name = "bandwidth-limiter"
-version = "0.7.1"
+version = "0.7.2"
 description = "Bandwidth limiter and traffic monitor for Windows"
 authors = ["Fer"]
 edition = "2021"
