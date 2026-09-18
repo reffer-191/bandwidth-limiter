@@ -7,7 +7,9 @@ import { useT, type T } from "../lib/i18n";
 
 /** Display name for an app row; engine pseudo-apps are localized here. */
 export function appName(a: Pick<AppRate, "key" | "name">, t: T): string {
-  return a.key === "unknown" ? t("app.unknown") : a.name;
+  if (a.key === "unknown") return t("app.unknown");
+  if (a.key === "hotspot:?") return t("app.hotspotOther");
+  return a.name;
 }
 
 export function appDescription(a: Pick<AppRate, "key" | "description" | "isDevice">, t: T): string {

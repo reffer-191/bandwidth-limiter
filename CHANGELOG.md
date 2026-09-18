@@ -4,6 +4,11 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.8.1] - 2026-09-18
+
+### Fixed
+- Public addresses (142.251.x.x, 172.217.x.x…) showed up as "devices connected to the hotspot": for forwarded packets the direction was taken from the adapter table alone, which lags a few seconds when the hotspot is switched on, so the Internet side was mistaken for the client. The client is now the private/on-link address; traffic with no private side goes to one generic "Hotspot (traffic without a device)" row, and the bogus rows are removed from the usage history on start.
+
 ## [0.8.0] - 2026-09-18
 
 ### Added

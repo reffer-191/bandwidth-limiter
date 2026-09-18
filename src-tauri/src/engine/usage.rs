@@ -95,6 +95,7 @@ impl UsageStore {
             Ok(db) => {
                 store.db = Some(db);
                 store.migrate_legacy();
+                store.drop_bogus_devices();
                 if let Err(e) = store.read_all() {
                     log::warn!("usage read: {e}");
                 }
@@ -178,6 +179,37 @@ impl UsageStore {
                 }
                 Err(e) => log::warn!("usage migration: {e}"),
             }
+        }
+    }
+
+    /// Versions before 0.8.1 could record public addresses as hotspot
+    /// "devices" (direction guessed wrong); remove them for good.
+    fn drop_bogus_devices(&mut self) {
+        let Some(db) = self.db.as_ref() else { return };
+        let keys: Vec<String> = db
+            .prepare("SELECT key FROM apps WHERE key LIKE 'hotspot:%'")
+            .and_then(|mut st| st.query_map([], |r| r.get::<_, String>(0)).map(|it| it.flatten().collect()))
+            .unwrap_or_default();
+        let bogus: Vec<String> = keys
+            .into_iter()
+            .filter(|k| {
+                let ip = &k["hotspot:".len()..];
+                match ip.parse::<std::net::IpAddr>() {
+                    Ok(std::net::IpAddr::V4(v4)) => !super::packet::is_local(&super::packet::map_ipv4(&v4.octets())),
+                    Ok(std::net::IpAddr::V6(v6)) => !super::packet::is_local(&v6.octets()),
+                    Err(_) => false,
+                }
+            })
+            .collect();
+        for k in &bogus {
+            for r in [db.execute("DELETE FROM usage WHERE key = ?1", params![k]), db.execute("DELETE FROM apps WHERE key = ?1", params![k])] {
+                if let Err(e) = r {
+                    log::warn!("usage cleanup: {e}");
+                }
+            }
+        }
+        if !bogus.is_empty() {
+            log::info!("usage: removed {} public addresses recorded as hotspot devices", bogus.len());
         }
     }
 

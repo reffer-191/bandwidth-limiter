@@ -140,6 +140,7 @@ const es = {
   "app.unknown.desc": "Tráfico sin proceso identificado",
   "app.system.desc": "Núcleo de Windows (SMB, actualizaciones, etc.)",
   "app.device.desc": "Dispositivo conectado al hotspot",
+  "app.hotspotOther": "Hotspot (tráfico sin dispositivo)",
 
   // settings
   "set.appearance": "Apariencia",
@@ -455,6 +456,7 @@ const en: Record<Key, string> = {
   "app.unknown.desc": "Traffic without an identified process",
   "app.system.desc": "Windows kernel (SMB, updates, etc.)",
   "app.device.desc": "Device connected to the hotspot",
+  "app.hotspotOther": "Hotspot (traffic without a device)",
 
   "set.appearance": "Appearance",
   "set.language": "Language",

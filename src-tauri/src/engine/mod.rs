@@ -85,7 +85,9 @@ impl Apps {
     }
 
     fn device(&mut self, ip: &packet::Addr16) -> (AppId, bool) {
-        let ip = packet::addr_to_string(ip);
+        // Only private addresses can be hotspot clients; anything else
+        // (transit traffic, odd forwards) goes to one generic device row.
+        let ip = if packet::is_local(ip) { packet::addr_to_string(ip) } else { "?".to_string() };
         let key = format!("hotspot:{ip}");
         if let Some(&id) = self.by_key.get(&key) {
             return (id, false);
@@ -493,7 +495,18 @@ impl State {
         };
         let (outbound, local, local_port, remote, remote_port) = if forward {
             // Forwarded traffic: "download" means heading to a hotspot client.
-            let to_client = self.adapters.read().is_on_link(&p.dst);
+            // The client is the private/on-link side; a public address can
+            // never be a device, whatever the adapter table says (it lags a
+            // few seconds behind when the hotspot is switched on).
+            let (src_local, dst_local) = {
+                let a = self.adapters.read();
+                (packet::is_local(&p.src) || a.is_on_link(&p.src), packet::is_local(&p.dst) || a.is_on_link(&p.dst))
+            };
+            let to_client = match (src_local, dst_local) {
+                (false, true) => true,
+                (true, false) => false,
+                _ => self.adapters.read().is_on_link(&p.dst),
+            };
             if to_client {
                 (false, p.dst, p.dst_port, p.src, p.src_port)
             } else {
