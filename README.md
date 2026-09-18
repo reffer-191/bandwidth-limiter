@@ -27,6 +27,7 @@ A lightweight bandwidth limiter and network traffic monitor for Windows, in the 
 - **Start with Windows**, start minimised, light/dark theme, bits or bytes, **English and Spanish** interface (follows the Windows language).
 - **Keyboard friendly** – Ctrl+F search, Ctrl+1…5 views, ↑/↓ + Enter in the list, Esc to close.
 - **Automatic updates** – new releases are offered in-app and installed with one click (signed update feed).
+- **Self-healing engine and diagnostics** – the capture driver is re-opened automatically if it dies; *Settings → Diagnostics* shows the engine state, a rotating log and a one-click report for bug reports.
 - Tiny footprint: ~45 MB of RAM and well under 1 % CPU while shaping.
 
 ## Download
@@ -108,6 +109,9 @@ The app checks the project's releases a few seconds after starting (switch it of
 - *Settings → Close to tray* makes the **X** hide the window instead of quitting, keeping the limits active.
 - *Settings → Start with Windows* creates a scheduled task that launches the app (minimised) at logon with the required privileges. The uninstaller removes it.
 
+### Diagnostics
+*Settings → Diagnostics* shows whether the capture engine is healthy: running threads, packets captured, queued/dropped packets, re-injection errors, driver restarts, adapters and the last warnings. **Copy report** puts all of that plus the last log lines on the clipboard, ready to paste into an issue; **Open log folder** opens `%LOCALAPPDATA%\Bandwidth Limiter\logs` (`logs\` next to the exe in portable mode), where `app.log` rotates at 1 MB keeping three generations. If a capture thread dies — for example when another tool unloads the WinDivert driver or the Base Filtering Engine restarts — the engine re-opens the driver on its own within 15 s and counts the restart.
+
 ### Notifications
 Windows toast notifications, each switchable in *Settings → Notifications*: **New application** (first time a program or hotspot device uses the network — off by default), **Quota reached** and **Scheduled rules** (a rule was activated or deactivated by its schedule). *Test* shows a sample toast; clicking a toast brings the window back.
 
@@ -135,6 +139,7 @@ src/                  frontend (React)
 src-tauri/src/
   windivert.rs        dynamic binding to WinDivert.dll
   engine/mod.rs       capture threads, application table, 1 s ticker → "tick" event
+  diag.rs             rotating log + in-memory tail for the diagnostics panel
   engine/shaper.rs    token buckets, queues, priority-weighted scheduler, connection/adapter matching
   engine/effective.rs schedules + quotas → what is enforced right now
   engine/flows.rs     5-tuple → PID (WinDivert events + iphlpapi fallback)
@@ -181,11 +186,11 @@ Handy while developing:
 
 **Why does it need administrator rights?** Capturing and delaying packets requires a kernel driver, and loading it needs elevation. The driver is unloaded when you quit.
 
-**Some traffic shows as "Unknown".** The first packets of a brand-new connection can arrive before Windows reports which process owns it. The amount is usually tiny.
+**Some traffic shows as "Unknown".** Packets whose owning process Windows never reports (very short-lived connections, kernel traffic without a socket). Since 0.8 the bytes of a new connection that arrive before its owner is known are parked for a few seconds and moved to the right application once the socket event arrives, so "Unknown" stays small.
 
 **The chart shows less than what arrives at my network card.** Speeds and totals count the packets the limiter delivers; what it drops while TCP adapts to a limit is not counted, so the curve never exceeds an active limit (local traffic excluded by *Internet traffic only* is still shown, of course).
 
-**Limits look ~5 % lower than configured.** Limits are enforced on the wire, including TCP/IP headers, while download managers report payload only.
+**Do limits include TCP/IP headers?** Not by default: since 0.8 limits and the displayed speeds are measured on the payload, which is what download managers show, so 1 Mbit/s reads as 1 Mbit/s. *Settings → Engine → Count TCP/IP headers* switches to the wire length (about 3–5 % more) if you prefer to shape what the network card sends.
 
 **Why is the certificate self-signed?** Certificates trusted by Windows cost money every year. Projects that want to remove the SmartScreen warning can apply to [SignPath Foundation](https://signpath.org/) (free signing for open-source projects) or buy an OV/EV certificate; the build already supports any certificate through `scripts/sign.ps1`.
 

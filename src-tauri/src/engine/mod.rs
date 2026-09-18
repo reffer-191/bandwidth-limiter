@@ -12,7 +12,7 @@ pub mod usage;
 
 use std::collections::HashMap;
 use std::ffi::c_void;
-use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicPtr, AtomicU32, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 use std::time::{Duration, Instant};
@@ -28,7 +28,7 @@ use crate::windivert::{self as wd, Address, Handle, WinDivert};
 
 use adapters::AdapterInfo;
 use effective::States;
-use flows::{FlowKey, FlowTable};
+use flows::{FlowKey, FlowTable, Pending};
 use shaper::{ConnMatcher, Decision, Dir, Limits, QueueKey, QueuedPacket, Shaper};
 use stats::{Bytes, Rate, Sample, Stats};
 
@@ -121,6 +121,14 @@ pub struct Status {
     /// Packets seen by the capture threads since start (diagnostics).
     pub packets: u64,
     pub last_error: Option<String>,
+    /// Capture re-opens performed by the watchdog.
+    pub restarts: u32,
+    /// Packets WinDivert refused to re-inject.
+    pub send_errors: u64,
+    /// Capture threads currently running (network, forward, flow, socket).
+    pub threads: u32,
+    /// Bytes first booked as "Unknown" and later moved to their app.
+    pub reattributed: u64,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -183,10 +191,25 @@ pub struct State {
     dns_dirty: AtomicBool,
     /// Apps first seen in this session, waiting for a notification.
     new_apps: Mutex<Vec<AppId>>,
+    /// Bytes to move from "Unknown" to an app in the usage store (ticker).
+    reattributed: Mutex<Vec<(AppId, u64, u64)>>,
+    /// Charge IP/TCP headers to the buckets (config.count_headers).
+    count_headers: AtomicBool,
     /// network, forward, flow, socket
     handles: [AtomicPtr<c_void>; 4],
+    /// Bumped on every (re)open so stale threads know they are obsolete.
+    open_gen: AtomicU32,
+    threads: AtomicU32,
+    /// A capture thread died with an error; the watchdog re-opens.
+    capture_failed: AtomicBool,
+    last_open: Mutex<Instant>,
+    pub started: Instant,
     running: AtomicBool,
 }
+
+/// Packets per `WinDivertRecvEx` call and the buffer that holds them.
+const RECV_BATCH: usize = 64;
+const RECV_BUF: usize = 512 * 1024;
 
 pub struct Engine {
     pub state: Arc<State>,
@@ -251,14 +274,21 @@ impl Engine {
             dns: Mutex::new(HashMap::new()),
             dns_dirty: AtomicBool::new(true),
             new_apps: Mutex::new(Vec::new()),
+            reattributed: Mutex::new(Vec::new()),
+            count_headers: AtomicBool::new(config.count_headers),
             handles: std::array::from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
+            open_gen: AtomicU32::new(0),
+            threads: AtomicU32::new(0),
+            capture_failed: AtomicBool::new(false),
+            last_open: Mutex::new(Instant::now()),
+            started: Instant::now(),
             running: AtomicBool::new(true),
         });
         let engine = Engine { state: state.clone(), app: app.clone() };
         state.refresh_effective(&config, now_ms(), None);
 
-        if let Some(w) = wd {
-            engine.open_capture(w);
+        if wd.is_some() {
+            state.open_capture();
         }
 
         {
@@ -276,68 +306,20 @@ impl Engine {
         engine
     }
 
-    fn open_capture(&self, w: &'static WinDivert) {
-        let s = &self.state;
-        let lang = s.config.read().lang();
-        // Main network layer: everything except loopback. A priority above
-        // the default 0 means we see packets before other WinDivert users
-        // (VPN clients, an older copy of this app) and they only get what we
-        // let through.
-        match w.open("!loopback", wd::LAYER_NETWORK, CAPTURE_PRIORITY, 0) {
-            Ok(h) => {
-                let _ = w.set_param(h, wd::PARAM_QUEUE_LENGTH, 16384);
-                let _ = w.set_param(h, wd::PARAM_QUEUE_TIME, 4000);
-                let _ = w.set_param(h, wd::PARAM_QUEUE_SIZE, 16 * 1024 * 1024);
-                s.handles[0].store(h, Ordering::SeqCst);
-                s.status.lock().driver_ok = true;
-                let st = s.clone();
-                let hv = h as usize;
-                thread::Builder::new().name("bwl-net".into()).spawn(move || recv_loop(st, hv as Handle, false)).unwrap();
-            }
-            Err(e) => {
-                s.status.lock().driver_error = Some(wd::explain_open_error(&e, lang));
-                return;
-            }
-        }
-        // Forwarded packets (hotspot / ICS clients).
-        match w.open("true", wd::LAYER_NETWORK_FORWARD, CAPTURE_PRIORITY, 0) {
-            Ok(h) => {
-                let _ = w.set_param(h, wd::PARAM_QUEUE_LENGTH, 16384);
-                let _ = w.set_param(h, wd::PARAM_QUEUE_TIME, 4000);
-                let _ = w.set_param(h, wd::PARAM_QUEUE_SIZE, 16 * 1024 * 1024);
-                s.handles[1].store(h, Ordering::SeqCst);
-                s.status.lock().forward_ok = true;
-                let st = s.clone();
-                let hv = h as usize;
-                thread::Builder::new().name("bwl-fwd".into()).spawn(move || recv_loop(st, hv as Handle, true)).unwrap();
-            }
-            Err(e) => s.status.lock().forward_error = Some(wd::explain_open_error(&e, lang)),
-        }
-        // Flow + socket events for process attribution.
-        for (layer, name, slot) in [(wd::LAYER_FLOW, "bwl-flow", 2), (wd::LAYER_SOCKET, "bwl-sock", 3)] {
-            match w.open("true", layer, 0, wd::FLAG_SNIFF | wd::FLAG_RECV_ONLY) {
-                Ok(h) => {
-                    s.handles[slot].store(h, Ordering::SeqCst);
-                    let st = s.clone();
-                    let hv = h as usize;
-                    thread::Builder::new().name(name.into()).spawn(move || event_loop(st, hv as Handle, layer)).unwrap();
-                }
-                Err(e) => log::warn!("{name}: {}", wd::explain_open_error(&e, lang)),
-            }
-        }
-    }
-
     pub fn set_config(&self, mut cfg: Config) -> Result<Config, String> {
         cfg.sanitize();
         let s = &self.state;
         s.config_gen.fetch_add(1, Ordering::SeqCst);
         s.dns_dirty.store(true, Ordering::SeqCst);
         *s.config.write() = cfg.clone();
+        s.count_headers.store(cfg.count_headers, Ordering::Relaxed);
         s.refresh_effective(&cfg, now_ms(), None);
         cfg.save().map_err(|e| format!("{}: {e}", tr(cfg.lang(), "cfg.save")))?;
         // Keep every other surface (tray menu, UI) in sync.
         crate::tray::sync(&self.app, &cfg);
-        let _ = self.app.emit("config", &cfg);
+        if let Err(e) = self.app.emit("config", &cfg) {
+            log::debug!("emit config: {e}");
+        }
         Ok(cfg)
     }
 
@@ -349,36 +331,164 @@ impl Engine {
         if let Err(e) = s.usage.lock().save() {
             log::warn!("usage save: {e}");
         }
-        if let Some(w) = s.wd {
-            // Flush queued packets so nothing in flight is lost.
-            let mut out = Vec::new();
-            s.shaper.lock().drain_all(&mut out);
-            for p in out {
-                let h = s.handles[p.forward as usize].load(Ordering::SeqCst);
-                if !h.is_null() {
-                    let _ = w.send(h, &p.data, &p.addr);
-                }
-            }
-            for h in &s.handles {
-                let h = h.swap(std::ptr::null_mut(), Ordering::SeqCst);
-                if !h.is_null() {
-                    w.shutdown(h);
-                    w.close(h);
-                }
-            }
+        if s.wd.is_some() {
+            s.close_capture(true);
             // WinDivert leaves its kernel driver loaded until reboot; unload it
             // if nobody else is using it so we leave the system as we found it.
             crate::elevate::stop_driver_service("WinDivert");
         }
         s.sched_cv.notify_all();
+        log::info!("engine stopped");
     }
 }
 
 impl State {
+    /// Opens the WinDivert handles and starts the capture threads. Safe to
+    /// call again after `close_capture` (the watchdog does).
+    fn open_capture(self: &Arc<Self>) {
+        let Some(w) = self.wd else { return };
+        let lang = self.config.read().lang();
+        let gen = self.open_gen.fetch_add(1, Ordering::SeqCst) + 1;
+        *self.last_open.lock() = Instant::now();
+        self.capture_failed.store(false, Ordering::SeqCst);
+        let tune = |h: Handle| {
+            for (param, value) in [(wd::PARAM_QUEUE_LENGTH, 16384), (wd::PARAM_QUEUE_TIME, 4000), (wd::PARAM_QUEUE_SIZE, 16 * 1024 * 1024)] {
+                if let Err(e) = w.set_param(h, param, value) {
+                    log::warn!("set_param {param}: {e}");
+                }
+            }
+        };
+        // Main network layer: everything except loopback. A priority above
+        // the default 0 means we see packets before other WinDivert users
+        // (VPN clients, an older copy of this app) and they only get what we
+        // let through.
+        match w.open("!loopback", wd::LAYER_NETWORK, CAPTURE_PRIORITY, 0) {
+            Ok(h) => {
+                tune(h);
+                self.handles[0].store(h, Ordering::SeqCst);
+                {
+                    let mut st = self.status.lock();
+                    st.driver_ok = true;
+                    st.driver_error = None;
+                }
+                let st = self.clone();
+                let hv = h as usize;
+                self.threads.fetch_add(1, Ordering::SeqCst);
+                thread::Builder::new().name("bwl-net".into()).spawn(move || recv_loop(st, hv as Handle, false, gen)).unwrap();
+            }
+            Err(e) => {
+                let msg = wd::explain_open_error(&e, lang);
+                log::error!("open NETWORK: {msg}");
+                let mut st = self.status.lock();
+                st.driver_ok = false;
+                st.driver_error = Some(msg);
+                return;
+            }
+        }
+        // Forwarded packets (hotspot / ICS clients).
+        match w.open("true", wd::LAYER_NETWORK_FORWARD, CAPTURE_PRIORITY, 0) {
+            Ok(h) => {
+                tune(h);
+                self.handles[1].store(h, Ordering::SeqCst);
+                {
+                    let mut st = self.status.lock();
+                    st.forward_ok = true;
+                    st.forward_error = None;
+                }
+                let st = self.clone();
+                let hv = h as usize;
+                self.threads.fetch_add(1, Ordering::SeqCst);
+                thread::Builder::new().name("bwl-fwd".into()).spawn(move || recv_loop(st, hv as Handle, true, gen)).unwrap();
+            }
+            Err(e) => {
+                let msg = wd::explain_open_error(&e, lang);
+                log::warn!("open NETWORK_FORWARD: {msg}");
+                self.status.lock().forward_error = Some(msg);
+            }
+        }
+        // Flow + socket events for process attribution.
+        for (layer, name, slot) in [(wd::LAYER_FLOW, "bwl-flow", 2), (wd::LAYER_SOCKET, "bwl-sock", 3)] {
+            match w.open("true", layer, 0, wd::FLAG_SNIFF | wd::FLAG_RECV_ONLY) {
+                Ok(h) => {
+                    self.handles[slot].store(h, Ordering::SeqCst);
+                    let st = self.clone();
+                    let hv = h as usize;
+                    self.threads.fetch_add(1, Ordering::SeqCst);
+                    thread::Builder::new().name(name.into()).spawn(move || event_loop(st, hv as Handle, layer, gen)).unwrap();
+                }
+                Err(e) => log::warn!("{name}: {}", wd::explain_open_error(&e, lang)),
+            }
+        }
+        log::info!("capture open (generation {gen})");
+    }
+
+    /// Shuts the handles; the capture threads notice and exit. With
+    /// `flush`, queued packets are sent first so nothing in flight is lost.
+    fn close_capture(&self, flush: bool) {
+        let Some(w) = self.wd else { return };
+        if flush {
+            let mut out = Vec::new();
+            self.shaper.lock().drain_all(&mut out);
+            for p in out {
+                let h = self.handles[p.forward as usize].load(Ordering::SeqCst);
+                if !h.is_null() && w.send(h, &p.data, &p.addr).is_err() {
+                    self.status.lock().send_errors += 1;
+                }
+            }
+        }
+        for h in &self.handles {
+            let h = h.swap(std::ptr::null_mut(), Ordering::SeqCst);
+            if !h.is_null() {
+                w.shutdown(h);
+                w.close(h);
+            }
+        }
+        {
+            let mut st = self.status.lock();
+            st.driver_ok = false;
+            st.forward_ok = false;
+        }
+    }
+
+    /// Watchdog: called by the ticker. Re-opens the capture when a thread
+    /// died or the initial open failed, at most every 15 s.
+    fn watchdog(self: &Arc<Self>) {
+        if self.wd.is_none() {
+            return;
+        }
+        let failed = self.capture_failed.load(Ordering::SeqCst);
+        let not_open = !self.status.lock().driver_ok;
+        if !(failed || not_open) {
+            return;
+        }
+        if self.last_open.lock().elapsed() < Duration::from_secs(15) {
+            return;
+        }
+        log::warn!("watchdog: capture {} — reopening", if failed { "thread failed" } else { "not open" });
+        self.close_capture(false);
+        // Give the old threads a moment to see the closed handles.
+        thread::sleep(Duration::from_millis(200));
+        self.status.lock().restarts += 1;
+        self.open_capture();
+    }
+
+    /// A flow that was counted as "Unknown" turned out to belong to `pid`.
+    fn reattribute(&self, pid: u32, pending: Pending) {
+        let (app, _) = self.apps.lock().app_for_pid(pid);
+        if app == 0 {
+            return;
+        }
+        self.stats.lock().reattribute(0, app, pending.dl, pending.ul);
+        self.reattributed.lock().push((app, pending.dl, pending.ul));
+        self.status.lock().reattributed += pending.dl + pending.ul;
+    }
+
     fn handle_packet(&self, handle: Handle, forward: bool, pkt: &[u8], addr: Address) {
         let w = self.wd.unwrap();
         let Some(p) = packet::parse(pkt) else {
-            let _ = w.send(handle, pkt, &addr);
+            if w.send(handle, pkt, &addr).is_err() {
+                self.status.lock().send_errors += 1;
+            }
             return;
         };
         let (outbound, local, local_port, remote, remote_port) = if forward {
@@ -396,16 +506,29 @@ impl State {
         };
         let internet = !packet::is_local(&remote);
 
+        let len = pkt.len();
+        // What the buckets and the counters see: the payload by default, the
+        // whole packet when the user asked to count headers.
+        let charge = if self.count_headers.load(Ordering::Relaxed) { len } else { p.payload_len(len) };
         let (app, created) = if forward {
             self.apps.lock().device(&local)
         } else {
-            let pid = self.flows.lock().lookup(&FlowKey {
-                protocol: p.protocol,
-                local,
-                local_port,
-                remote,
-                remote_port,
-            });
+            let key = FlowKey { protocol: p.protocol, local, local_port, remote, remote_port };
+            let (pid, pending) = {
+                let mut flows = self.flows.lock();
+                let pid = flows.lookup(&key);
+                if pid == 0 {
+                    // Owner not known yet: park the bytes so they can follow
+                    // the process once the socket event arrives.
+                    flows.note_unknown(key, outbound, charge);
+                    (0, None)
+                } else {
+                    (pid, flows.take_pending(&key))
+                }
+            };
+            if let Some(pending) = pending {
+                self.reattribute(pid, pending);
+            }
             self.apps.lock().app_for_pid(pid)
         };
         if created {
@@ -415,21 +538,22 @@ impl State {
             self.new_apps.lock().push(app);
         }
 
-        let len = pkt.len();
         let decision = {
             let mut sh = self.shaper.lock();
             let conn = if sh.matchers.is_empty() { 0 } else { sh.match_conn(app, &remote, remote_port, p.protocol) };
             let adapter = if forward || sh.if_map.is_empty() { 0 } else { sh.adapter_for(addr.if_idx()) };
             let key = QueueKey { app, dir: if outbound { Dir::Up } else { Dir::Down }, forward, internet, conn, adapter };
-            sh.admit(key, len, || QueuedPacket { data: pkt.to_vec(), addr, forward, app, outbound, internet })
+            sh.admit(key, len, charge, || QueuedPacket { data: pkt.to_vec(), addr, forward, app, outbound, internet, charge })
         };
         // Traffic is accounted when it is delivered (here, or by the
         // scheduler for queued packets), never when it is dropped, so the
         // chart and the quotas reflect what the limiter lets through.
         match decision {
             Decision::Pass => {
-                self.stats.lock().counters.record(app, outbound, len, internet, forward);
-                let _ = w.send(handle, pkt, &addr);
+                self.stats.lock().counters.record(app, outbound, charge, internet, forward);
+                if w.send(handle, pkt, &addr).is_err() {
+                    self.status.lock().send_errors += 1;
+                }
             }
             Decision::Drop => {}
             Decision::Queued => {
@@ -572,48 +696,88 @@ impl State {
     }
 }
 
-fn recv_loop(state: Arc<State>, handle: Handle, forward: bool) {
+fn recv_loop(state: Arc<State>, handle: Handle, forward: bool, gen: u32) {
     let w = state.wd.unwrap();
-    let mut buf = vec![0u8; wd::MTU_MAX];
-    let mut addr = Address::default();
+    let mut buf = vec![0u8; RECV_BUF];
+    let mut addrs = vec![Address::default(); RECV_BATCH];
     let mut n: u64 = 0;
-    while state.running.load(Ordering::Relaxed) {
-        match w.recv(handle, &mut buf, &mut addr) {
-            Ok(len) => {
-                n += 1;
-                if n % 64 == 0 {
-                    state.status.lock().packets += 64;
+    let mut errors: u32 = 0;
+    let name = if forward { "forward" } else { "network" };
+    while state.running.load(Ordering::Relaxed) && state.open_gen.load(Ordering::Relaxed) == gen {
+        match w.recv_ex(handle, &mut buf, &mut addrs) {
+            Ok((len, count)) => {
+                errors = 0;
+                // Packets sit back to back; each one's length comes from its
+                // IP header (the last one takes whatever is left).
+                let mut off = 0;
+                for addr in addrs.iter().take(count) {
+                    if off >= len {
+                        break;
+                    }
+                    let plen = packet::parse(&buf[off..len]).map(|p| p.total_len).filter(|&l| l > 0 && off + l <= len).unwrap_or(len - off);
+                    // Copy out so the parsed slice never aliases the batch
+                    // buffer while the next iteration reads it.
+                    let pkt = &buf[off..off + plen];
+                    state.handle_packet(handle, forward, pkt, *addr);
+                    off += plen;
+                    n += 1;
+                    if n % 64 == 0 {
+                        state.status.lock().packets += 64;
+                    }
                 }
-                state.handle_packet(handle, forward, &buf[..len], addr)
             }
             Err(e) => match e.raw_os_error() {
                 // ERROR_NO_DATA (shutdown) / ERROR_OPERATION_ABORTED / INVALID_HANDLE
                 Some(232) | Some(995) | Some(6) => break,
                 _ => {
-                    log::warn!("recv: {e}");
-                    state.status.lock().last_error = Some(format!("recv: {e}"));
+                    errors += 1;
+                    if errors == 1 {
+                        log::warn!("recv ({name}): {e}");
+                        state.status.lock().last_error = Some(format!("recv ({name}): {e}"));
+                    }
+                    if errors > 200 {
+                        // A second of consecutive failures: the handle is
+                        // dead (BFE restarted, driver unloaded…). Let the
+                        // watchdog rebuild everything.
+                        log::error!("recv ({name}): giving up after {errors} errors");
+                        state.capture_failed.store(true, Ordering::SeqCst);
+                        break;
+                    }
                     thread::sleep(Duration::from_millis(5));
                 }
             },
         }
     }
-    state.status.lock().last_error = Some(format!("capture thread ended (forward={forward})"));
+    state.threads.fetch_sub(1, Ordering::SeqCst);
+    log::info!("capture thread ({name}, generation {gen}) ended");
 }
 
-fn event_loop(state: Arc<State>, handle: Handle, layer: u32) {
+fn event_loop(state: Arc<State>, handle: Handle, layer: u32, gen: u32) {
     let w = state.wd.unwrap();
     let mut addr = Address::default();
     let mut none = [0u8; 0];
-    while state.running.load(Ordering::Relaxed) {
+    let mut errors: u32 = 0;
+    let name = if layer == wd::LAYER_FLOW { "flow" } else { "socket" };
+    while state.running.load(Ordering::Relaxed) && state.open_gen.load(Ordering::Relaxed) == gen {
         if let Err(e) = w.recv(handle, &mut none, &mut addr) {
             match e.raw_os_error() {
                 Some(232) | Some(995) | Some(6) => break,
                 _ => {
+                    errors += 1;
+                    if errors == 1 {
+                        log::warn!("recv ({name}): {e}");
+                    }
+                    if errors > 200 {
+                        log::error!("recv ({name}): giving up after {errors} errors");
+                        state.capture_failed.store(true, Ordering::SeqCst);
+                        break;
+                    }
                     thread::sleep(Duration::from_millis(5));
                     continue;
                 }
             }
         }
+        errors = 0;
         let f = addr.flow();
         let key = FlowKey {
             protocol: f.protocol,
@@ -622,35 +786,50 @@ fn event_loop(state: Arc<State>, handle: Handle, layer: u32) {
             remote: w.hton_ipv6(&f.remote_addr),
             remote_port: f.remote_port,
         };
-        let mut flows = state.flows.lock();
-        if layer == wd::LAYER_FLOW {
-            match addr.event() {
-                wd::EVENT_FLOW_ESTABLISHED => flows.insert_event(key, f.process_id),
-                wd::EVENT_FLOW_DELETED => flows.remove_event(&key),
-                _ => {}
+        let pending = {
+            let mut flows = state.flows.lock();
+            let mut learnt = false;
+            if layer == wd::LAYER_FLOW {
+                match addr.event() {
+                    wd::EVENT_FLOW_ESTABLISHED => {
+                        flows.insert_event(key, f.process_id);
+                        learnt = true;
+                    }
+                    wd::EVENT_FLOW_DELETED => flows.remove_event(&key),
+                    _ => {}
+                }
+            } else {
+                match addr.event() {
+                    wd::EVENT_SOCKET_BIND | wd::EVENT_SOCKET_LISTEN => {
+                        flows.insert_local_ep(f.protocol, f.local_port, f.process_id)
+                    }
+                    wd::EVENT_SOCKET_CONNECT | wd::EVENT_SOCKET_ACCEPT => {
+                        flows.insert_event(key, f.process_id);
+                        flows.insert_local_ep(f.protocol, f.local_port, f.process_id);
+                        learnt = true;
+                    }
+                    wd::EVENT_SOCKET_CLOSE => {
+                        flows.remove_event(&key);
+                        flows.remove_local_ep(f.protocol, f.local_port);
+                    }
+                    _ => {}
+                }
             }
-        } else {
-            match addr.event() {
-                wd::EVENT_SOCKET_BIND | wd::EVENT_SOCKET_LISTEN => {
-                    flows.insert_local_ep(f.protocol, f.local_port, f.process_id)
-                }
-                wd::EVENT_SOCKET_CONNECT | wd::EVENT_SOCKET_ACCEPT => {
-                    flows.insert_event(key, f.process_id);
-                    flows.insert_local_ep(f.protocol, f.local_port, f.process_id);
-                }
-                wd::EVENT_SOCKET_CLOSE => {
-                    flows.remove_event(&key);
-                    flows.remove_local_ep(f.protocol, f.local_port);
-                }
-                _ => {}
-            }
+            if learnt && f.process_id != 0 { flows.take_pending(&key) } else { None }
+        };
+        if let Some(p) = pending {
+            state.reattribute(f.process_id, p);
         }
     }
+    state.threads.fetch_sub(1, Ordering::SeqCst);
+    log::info!("event thread ({name}, generation {gen}) ended");
 }
 
 fn scheduler_loop(state: Arc<State>) {
     let Some(w) = state.wd else { return };
     let mut out: Vec<QueuedPacket> = Vec::with_capacity(512);
+    let mut batch: Vec<u8> = Vec::with_capacity(RECV_BUF);
+    let mut batch_addrs: Vec<Address> = Vec::with_capacity(512);
     let mut guard = state.shaper.lock();
     while state.running.load(Ordering::Relaxed) {
         let wait = guard.schedule(&mut out);
@@ -658,14 +837,38 @@ fn scheduler_loop(state: Arc<State>) {
             state.sched_cv.wait_for(&mut guard, wait);
         } else {
             MutexGuard::unlocked(&mut guard, || {
-                let mut stats = state.stats.lock();
-                for p in out.drain(..) {
-                    let h = state.handles[p.forward as usize].load(Ordering::Relaxed);
-                    if !h.is_null() {
-                        stats.counters.record(p.app, p.outbound, p.data.len(), p.internet, p.forward);
-                        let _ = w.send(h, &p.data, &p.addr);
+                {
+                    let mut stats = state.stats.lock();
+                    for p in out.iter() {
+                        stats.counters.record(p.app, p.outbound, p.charge, p.internet, p.forward);
                     }
                 }
+                // One WinDivertSendEx per handle: the packets are copied back
+                // to back into the batch buffer with one address each.
+                for fwd in [false, true] {
+                    let h = state.handles[fwd as usize].load(Ordering::Relaxed);
+                    if h.is_null() {
+                        continue;
+                    }
+                    batch.clear();
+                    batch_addrs.clear();
+                    for p in out.iter().filter(|p| p.forward == fwd) {
+                        batch.extend_from_slice(&p.data);
+                        batch_addrs.push(p.addr);
+                    }
+                    if batch_addrs.is_empty() {
+                        continue;
+                    }
+                    let r = if batch_addrs.len() == 1 { w.send(h, &batch, &batch_addrs[0]) } else { w.send_ex(h, &batch, &batch_addrs) };
+                    if let Err(e) = r {
+                        let mut st = state.status.lock();
+                        st.send_errors += batch_addrs.len() as u64;
+                        if st.send_errors % 1000 == 1 {
+                            log::warn!("send: {e}");
+                        }
+                    }
+                }
+                out.clear();
             });
         }
     }
@@ -684,7 +887,12 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
 
         if n % 5 == 0 {
             state.apps.lock().prune_dead();
+            let mut flows = state.flows.lock();
+            if flows.has_pending() {
+                flows.expire_pending(now);
+            }
         }
+        state.watchdog();
         if n % 15 == 0 {
             let info = adapters::enumerate();
             *state.adapters.write() = info;
@@ -703,6 +911,13 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
                     if let Some(m) = apps.list.get(*id as usize) {
                         usage.add(&m.key, m, delta.dl, delta.ul, ts);
                     }
+                }
+            }
+            // Bytes first booked as "Unknown" whose owner showed up.
+            let moved: Vec<(AppId, u64, u64)> = std::mem::take(&mut *state.reattributed.lock());
+            for (id, dl, ul) in moved {
+                if let Some(m) = apps.list.get(id as usize) {
+                    usage.transfer("unknown", m, dl, ul, ts);
                 }
             }
             if n % 30 == 0 {
@@ -735,7 +950,10 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
 
         let tick = build_tick(&state, &sample, &per_app);
         *state.latest.lock() = Some(tick.clone());
-        let _ = app.emit("tick", &tick);
+        if let Err(e) = app.emit("tick", &tick) {
+            log::debug!("emit tick: {e}");
+        }
+        state.status.lock().threads = state.threads.load(Ordering::Relaxed);
         if tick.limiting != last_limiting {
             last_limiting = tick.limiting;
             crate::tray::set_active(&app, tick.limiting);

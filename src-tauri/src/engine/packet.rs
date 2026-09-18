@@ -15,6 +15,19 @@ pub struct Parsed {
     /// 0 when the transport is not TCP/UDP.
     pub src_port: u16,
     pub dst_port: u16,
+    /// Length of the whole packet according to the IP header (used to split
+    /// batched receives).
+    pub total_len: usize,
+    /// IP + TCP/UDP header bytes; what remains is payload.
+    pub header_len: usize,
+}
+
+impl Parsed {
+    /// Bytes above the transport layer.
+    #[inline]
+    pub fn payload_len(&self, wire_len: usize) -> usize {
+        wire_len.saturating_sub(self.header_len)
+    }
 }
 
 #[inline]
@@ -47,7 +60,9 @@ pub fn parse(pkt: &[u8]) -> Option<Parsed> {
             let dst = map_ipv4(&pkt[16..20]);
             let frag_off = u16::from_be_bytes([pkt[6], pkt[7]]) & 0x1fff;
             let (sp, dp) = ports(pkt, ihl, protocol, frag_off != 0);
-            Some(Parsed { protocol, src, dst, src_port: sp, dst_port: dp })
+            let total_len = u16::from_be_bytes([pkt[2], pkt[3]]) as usize;
+            let header_len = ihl + transport_header(pkt, ihl, protocol, frag_off != 0);
+            Some(Parsed { protocol, src, dst, src_port: sp, dst_port: dp, total_len, header_len })
         }
         6 => {
             if pkt.len() < 40 {
@@ -59,7 +74,9 @@ pub fn parse(pkt: &[u8]) -> Option<Parsed> {
             src.copy_from_slice(&pkt[8..24]);
             dst.copy_from_slice(&pkt[24..40]);
             let (sp, dp) = ports(pkt, 40, protocol, false);
-            Some(Parsed { protocol, src, dst, src_port: sp, dst_port: dp })
+            let total_len = 40 + u16::from_be_bytes([pkt[4], pkt[5]]) as usize;
+            let header_len = 40 + transport_header(pkt, 40, protocol, false);
+            Some(Parsed { protocol, src, dst, src_port: sp, dst_port: dp, total_len, header_len })
         }
         _ => None,
     }
@@ -74,6 +91,19 @@ fn ports(pkt: &[u8], off: usize, protocol: u8, fragment: bool) -> (u16, u16) {
         u16::from_be_bytes([pkt[off], pkt[off + 1]]),
         u16::from_be_bytes([pkt[off + 2], pkt[off + 3]]),
     )
+}
+
+/// TCP header (data offset) or UDP header size; 0 for anything else.
+#[inline]
+fn transport_header(pkt: &[u8], off: usize, protocol: u8, fragment: bool) -> usize {
+    if fragment {
+        return 0;
+    }
+    match protocol {
+        PROTO_TCP if pkt.len() >= off + 13 => (((pkt[off + 12] >> 4) as usize) * 4).clamp(20, 60),
+        PROTO_UDP => 8,
+        _ => 0,
+    }
 }
 
 /// True when the address belongs to a private / link-local / multicast /
@@ -101,5 +131,69 @@ pub fn addr_to_string(a: &Addr16) -> String {
         format!("{}.{}.{}.{}", a[12], a[13], a[14], a[15])
     } else {
         std::net::Ipv6Addr::from(*a).to_string()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn ipv4(proto: u8, payload: usize) -> Vec<u8> {
+        let thdr = if proto == PROTO_TCP { 20 } else { 8 };
+        let total = 20 + thdr + payload;
+        let mut p = vec![0u8; total];
+        p[0] = 0x45;
+        p[2..4].copy_from_slice(&(total as u16).to_be_bytes());
+        p[9] = proto;
+        p[12..16].copy_from_slice(&[192, 168, 1, 2]);
+        p[16..20].copy_from_slice(&[93, 184, 216, 34]);
+        p[20..22].copy_from_slice(&443u16.to_be_bytes());
+        p[22..24].copy_from_slice(&51000u16.to_be_bytes());
+        if proto == PROTO_TCP {
+            p[32] = 5 << 4; // data offset: 5 words
+        }
+        p
+    }
+
+    #[test]
+    fn parses_ipv4_tcp_and_udp() {
+        let p = parse(&ipv4(PROTO_TCP, 100)).unwrap();
+        assert_eq!((p.src_port, p.dst_port), (443, 51000));
+        assert_eq!(p.total_len, 140);
+        assert_eq!(p.header_len, 40);
+        assert_eq!(p.payload_len(140), 100);
+        assert!(is_local(&p.src) && !is_local(&p.dst));
+        assert_eq!(addr_to_string(&p.dst), "93.184.216.34");
+        let u = parse(&ipv4(PROTO_UDP, 10)).unwrap();
+        assert_eq!(u.header_len, 28);
+        assert_eq!(u.total_len, 38);
+    }
+
+    #[test]
+    fn parses_ipv6_and_rejects_garbage() {
+        let mut p = vec![0u8; 40 + 20 + 5];
+        p[0] = 0x60;
+        p[4..6].copy_from_slice(&25u16.to_be_bytes());
+        p[6] = PROTO_TCP;
+        p[8] = 0xfe;
+        p[9] = 0x80;
+        p[24] = 0x2a;
+        p[40..42].copy_from_slice(&80u16.to_be_bytes());
+        p[42..44].copy_from_slice(&40000u16.to_be_bytes());
+        p[52] = 5 << 4;
+        let v6 = parse(&p).unwrap();
+        assert_eq!(v6.total_len, 65);
+        assert_eq!(v6.header_len, 60);
+        assert!(is_local(&v6.src) && !is_local(&v6.dst));
+        assert!(parse(&[]).is_none());
+        assert!(parse(&[0x45; 10]).is_none());
+        assert!(parse(&[0x75; 60]).is_none(), "unknown IP version");
+        // Fragments carry no ports and no transport header.
+        let mut f = ipv4(PROTO_TCP, 10);
+        f[6] = 0x00;
+        f[7] = 0x10;
+        let frag = parse(&f).unwrap();
+        assert_eq!((frag.src_port, frag.dst_port), (0, 0));
+        assert_eq!(frag.header_len, 20);
     }
 }

@@ -31,6 +31,18 @@ pub struct FlowInfo {
 
 const REFRESH_INTERVAL: Duration = Duration::from_millis(300);
 const MAX_EVENT_FLOWS: usize = 60_000;
+/// Bytes of a flow whose owner is not known yet are parked this long; once
+/// the owner shows up they are re-attributed, otherwise they stay "Unknown".
+const PENDING_TTL: Duration = Duration::from_secs(10);
+const MAX_PENDING: usize = 4_000;
+
+/// Bytes counted for "Unknown" while a flow had no owner.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Pending {
+    pub dl: u64,
+    pub ul: u64,
+    first: Option<Instant>,
+}
 
 pub struct FlowTable {
     /// Learned from FLOW/SOCKET events.
@@ -41,6 +53,7 @@ pub struct FlowTable {
     table: HashMap<FlowKey, u32>,
     table_ep: HashMap<(u8, u16), u32>,
     last_refresh: Instant,
+    pending: HashMap<FlowKey, Pending>,
 }
 
 impl Default for FlowTable {
@@ -51,6 +64,7 @@ impl Default for FlowTable {
             table: HashMap::new(),
             table_ep: HashMap::new(),
             last_refresh: Instant::now() - REFRESH_INTERVAL,
+            pending: HashMap::new(),
         }
     }
 }
@@ -105,6 +119,38 @@ impl FlowTable {
             .get(key)
             .or_else(|| self.table_ep.get(&(key.protocol, key.local_port)))
             .copied()
+    }
+
+    /// Records bytes seen on a flow that has no owner yet.
+    pub fn note_unknown(&mut self, key: FlowKey, outbound: bool, len: usize) {
+        if self.pending.len() >= MAX_PENDING {
+            self.expire_pending(Instant::now());
+            if self.pending.len() >= MAX_PENDING {
+                return;
+            }
+        }
+        let p = self.pending.entry(key).or_default();
+        if p.first.is_none() {
+            p.first = Some(Instant::now());
+        }
+        if outbound { p.ul += len as u64 } else { p.dl += len as u64 }
+    }
+
+    /// Bytes parked for a flow that just got an owner (removed from the table).
+    pub fn take_pending(&mut self, key: &FlowKey) -> Option<Pending> {
+        if self.pending.is_empty() {
+            return None;
+        }
+        self.pending.remove(key).filter(|p| p.dl + p.ul > 0)
+    }
+
+    pub fn has_pending(&self) -> bool {
+        !self.pending.is_empty()
+    }
+
+    /// Drops parked bytes older than the TTL (they stay with "Unknown").
+    pub fn expire_pending(&mut self, now: Instant) {
+        self.pending.retain(|_, p| p.first.map(|t| now.duration_since(t) < PENDING_TTL).unwrap_or(false));
     }
 
     /// Active flows for a set of pids (used by the UI connection list).
@@ -225,4 +271,52 @@ unsafe fn get_table(tcp: bool, family: u32) -> Option<Vec<u8>> {
         }
     }
     None
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn key(port: u16) -> FlowKey {
+        FlowKey { protocol: PROTO_TCP, local: map_ipv4(&[10, 0, 0, 2]), local_port: port, remote: map_ipv4(&[1, 1, 1, 1]), remote_port: 443 }
+    }
+
+    #[test]
+    fn events_and_endpoints_resolve_pids() {
+        let mut t = FlowTable::default();
+        t.last_refresh = Instant::now(); // keep iphlpapi out of the test
+        assert_eq!(t.lookup(&key(1000)), 0);
+        t.insert_event(key(1000), 42);
+        assert_eq!(t.lookup(&key(1000)), 42);
+        t.remove_event(&key(1000));
+        assert_eq!(t.lookup(&key(1000)), 0);
+        // A bound local port answers for every remote peer (UDP servers, listeners).
+        t.insert_local_ep(PROTO_TCP, 2000, 7);
+        assert_eq!(t.lookup(&key(2000)), 7);
+        t.remove_local_ep(PROTO_TCP, 2000);
+        assert_eq!(t.lookup(&key(2000)), 0);
+        assert_eq!(t.flows_for(&[42]).len(), 0);
+        t.insert_event(key(3000), 42);
+        assert_eq!(t.flows_for(&[42]), vec![(key(3000), 42)]);
+    }
+
+    #[test]
+    fn pending_bytes_follow_the_owner() {
+        let mut t = FlowTable::default();
+        t.note_unknown(key(1), false, 1500);
+        t.note_unknown(key(1), true, 60);
+        t.note_unknown(key(2), false, 10);
+        assert!(t.has_pending());
+        let p = t.take_pending(&key(1)).unwrap();
+        assert_eq!((p.dl, p.ul), (1500, 60));
+        assert!(t.take_pending(&key(1)).is_none(), "taken once");
+        t.expire_pending(Instant::now() + PENDING_TTL + Duration::from_secs(1));
+        assert!(!t.has_pending(), "old entries expire");
+        assert!(t.take_pending(&key(2)).is_none());
+    }
+
+    #[test]
+    fn iphlpapi_port_order() {
+        assert_eq!(port_of(0x0000_bb01), 0x01bb);
+    }
 }

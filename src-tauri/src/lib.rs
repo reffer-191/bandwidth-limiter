@@ -4,6 +4,7 @@ mod autostart;
 mod clock;
 mod commands;
 mod config;
+mod diag;
 mod dialogs;
 mod elevate;
 mod engine;
@@ -16,7 +17,8 @@ mod windivert;
 use tauri::{Manager, RunEvent, WebviewUrl, WebviewWindowBuilder, WindowEvent};
 
 pub fn run() {
-    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("info")).init();
+    diag::init();
+    log::info!("Bandwidth Limiter {} starting", env!("CARGO_PKG_VERSION"));
 
     // Release builds carry a requireAdministrator manifest; debug builds
     // re-launch themselves through UAC so `cargo tauri dev` just works.
@@ -74,10 +76,14 @@ pub fn run() {
             {
                 // Mica backdrop (Windows 11); acrylic as a fallback.
                 if window_vibrancy::apply_mica(&win, None).is_err() {
-                    let _ = window_vibrancy::apply_acrylic(&win, Some((18, 18, 18, 125)));
+                    if let Err(e) = window_vibrancy::apply_acrylic(&win, Some((18, 18, 18, 125))) {
+                        log::info!("no Mica/Acrylic backdrop: {e}");
+                    }
                 }
             }
-            let _ = win.show();
+            if let Err(e) = win.show() {
+                log::warn!("show window: {e}");
+            }
             // Start minimized when the user asked for it or when the logon task
             // launched us (nobody wants a window popping up at login).
             let (start_minimized, minimize_to_tray, cfg) = {
@@ -133,6 +139,8 @@ pub fn run() {
             commands::export_rules,
             commands::import_rules,
             commands::test_notification,
+            commands::get_diagnostics,
+            commands::open_log_folder,
         ])
         .build(tauri::generate_context!())
         .expect("error while building tauri application")

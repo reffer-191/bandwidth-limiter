@@ -27,6 +27,7 @@ Limitador de ancho de banda y monitor de tráfico para Windows, ligero y al esti
 - **Iniciar con Windows**, arranque minimizado, tema claro/oscuro, bits o bytes, interfaz en **español e inglés** (sigue el idioma de Windows).
 - **Cómoda con el teclado**: Ctrl+F busca, Ctrl+1…5 cambia de vista, ↑/↓ + Enter en la lista, Esc cierra.
 - **Actualizaciones automáticas**: las nuevas versiones se ofrecen dentro de la app y se instalan con un clic (fuente de actualizaciones firmada).
+- **Motor que se recupera solo y diagnóstico**: el driver de captura se reabre automáticamente si muere; *Ajustes → Diagnóstico* muestra el estado del motor, un registro rotativo y un informe de un clic para reportar fallos.
 - Consumo mínimo: ~45 MB de RAM y muy por debajo del 1 % de CPU mientras limita.
 
 ## Descarga
@@ -108,6 +109,9 @@ La app consulta las releases del proyecto unos segundos después de arrancar (se
 - *Ajustes → Cerrar a la bandeja* hace que la **X** oculte la ventana en vez de salir, manteniendo los límites activos.
 - *Ajustes → Iniciar con Windows* crea una tarea programada que lanza la app (minimizada) al iniciar sesión con los privilegios necesarios. El desinstalador la elimina.
 
+### Diagnóstico
+*Ajustes → Diagnóstico* muestra si el motor de captura está sano: hilos en marcha, paquetes capturados, en cola y descartados, errores de reinyección, reinicios del driver, adaptadores y los últimos avisos. **Copiar informe** deja todo eso más las últimas líneas del registro en el portapapeles, listo para pegar en un issue; **Abrir carpeta de registros** abre `%LOCALAPPDATA%\Bandwidth Limiter\logs` (`logs\` junto al exe en modo portable), donde `app.log` rota al llegar a 1 MB conservando tres generaciones. Si un hilo de captura muere (por ejemplo, otra herramienta descarga el driver WinDivert o se reinicia el Base Filtering Engine), el motor reabre el driver por su cuenta en menos de 15 s y anota el reinicio.
+
 ### Notificaciones
 Avisos de Windows (toasts), cada uno desactivable en *Ajustes → Notificaciones*: **Aplicación nueva** (la primera vez que un programa o un dispositivo del hotspot usa la red; desactivado por defecto), **Cuota agotada** y **Reglas por horario** (una regla se activó o desactivó por su horario). *Probar* muestra un aviso de ejemplo; al hacer clic en un aviso vuelve la ventana.
 
@@ -135,6 +139,7 @@ src/                  frontend (React)
 src-tauri/src/
   windivert.rs        binding dinámico a WinDivert.dll
   engine/mod.rs       hilos de captura, tabla de aplicaciones, ticker de 1 s → evento "tick"
+  diag.rs             registro rotativo + cola en memoria para el panel de diagnóstico
   engine/shaper.rs    token buckets, colas, planificador ponderado por prioridad, reglas por conexión/adaptador
   engine/effective.rs horarios + cuotas → lo que se aplica ahora mismo
   engine/flows.rs     5-tupla → PID (eventos de WinDivert + iphlpapi como respaldo)
@@ -181,9 +186,9 @@ npm run fetch -- v0.6.2  # descarga los ficheros publicados de una versión a di
 
 **¿Por qué pide administrador?** Capturar y retrasar paquetes requiere un driver del kernel, y cargarlo necesita elevación. El driver se descarga al salir.
 
-**Parte del tráfico aparece como "Desconocido".** Los primeros paquetes de una conexión nueva pueden llegar antes de que Windows informe de qué proceso es su dueño. Suele ser una cantidad mínima.
+**Parte del tráfico aparece como «Desconocido».** Paquetes cuyo proceso propietario Windows nunca llega a informar (conexiones muy cortas, tráfico del núcleo sin socket). Desde la 0.8, los bytes de una conexión nueva que llegan antes de conocer a su dueño se guardan unos segundos y pasan a la aplicación correcta en cuanto llega el evento del socket, así que «Desconocido» se mantiene pequeño.
 
-**Los límites parecen un ~5 % más bajos de lo configurado.** Se aplican a nivel de paquete, cabeceras TCP/IP incluidas, mientras que los gestores de descargas cuentan solo los datos útiles.
+**¿Los límites incluyen las cabeceras TCP/IP?** Por defecto no: desde la 0.8 los límites y las velocidades mostradas se miden sobre los datos útiles, que es lo que enseña un gestor de descargas, así que 1 Mbit/s se lee como 1 Mbit/s. *Ajustes → Motor → Contar cabeceras TCP/IP* cambia a la longitud en el cable (un 3–5 % más) si prefieres limitar lo que envía la tarjeta de red.
 
 **La gráfica muestra menos de lo que llega a mi tarjeta de red.** Velocidades y totales cuentan los paquetes que el limitador entrega; lo que descarta mientras TCP se adapta a un límite no se cuenta, así que la curva nunca supera un límite activo (el tráfico local excluido por *Solo tráfico de Internet* sí se muestra, claro).
 

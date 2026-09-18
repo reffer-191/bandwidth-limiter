@@ -164,6 +164,9 @@ pub struct QueuedPacket {
     pub app: AppId,
     pub outbound: bool,
     pub internet: bool,
+    /// Bytes charged to the buckets (payload, or the wire length when
+    /// headers are counted).
+    pub charge: usize,
 }
 
 #[derive(Default)]
@@ -332,7 +335,7 @@ impl Shaper {
 
     /// Fast path called from the receive threads. Either lets the packet go
     /// right now, drops it, or parks it in its class queue.
-    pub fn admit(&mut self, key: QueueKey, len: usize, make: impl FnOnce() -> QueuedPacket) -> Decision {
+    pub fn admit(&mut self, key: QueueKey, len: usize, charge: usize, make: impl FnOnce() -> QueuedPacket) -> Decision {
         if !self.master {
             return Decision::Pass;
         }
@@ -359,7 +362,7 @@ impl Shaper {
             }
             if all_ready {
                 for w in chain {
-                    self.limits_mut(*w).bucket(key.dir).unwrap().take(len);
+                    self.limits_mut(*w).bucket(key.dir).unwrap().take(charge);
                 }
                 return Decision::Pass;
             }
@@ -447,9 +450,9 @@ impl Shaper {
             };
             let key = self.order[i];
             let n = self.chain(&key, &mut chain);
-            let len = self.queues[&key].packets.front().map(|p| p.data.len()).unwrap_or(0);
+            let charge = self.queues[&key].packets.front().map(|p| p.charge).unwrap_or(0);
             for w in &chain[..n] {
-                self.limits_mut(*w).bucket(key.dir).unwrap().take(len);
+                self.limits_mut(*w).bucket(key.dir).unwrap().take(charge);
             }
             let weight = self.weight(key.app);
             let pkt = self.pop(&key).unwrap();
@@ -513,7 +516,7 @@ mod tests {
     }
 
     fn pkt(len: usize) -> QueuedPacket {
-        QueuedPacket { data: vec![0; len], addr: Address::default(), forward: false, app: 0, outbound: false, internet: true }
+        QueuedPacket { data: vec![0; len], addr: Address::default(), forward: false, app: 0, outbound: false, internet: true, charge: len }
     }
 
     fn drain(s: &mut Shaper, out: &mut Vec<QueuedPacket>) {
@@ -533,7 +536,7 @@ mod tests {
         let mut s = Shaper { global: Limits { down: Some(Bucket::new(100_000)), ..Default::default() }, ..Default::default() };
         let mut queued = 0;
         for _ in 0..40 {
-            if let Decision::Queued = s.admit(key(1), 1500, || pkt(1500)) {
+            if let Decision::Queued = s.admit(key(1), 1500, 1500, || pkt(1500)) {
                 queued += 1;
             }
         }
@@ -552,10 +555,10 @@ mod tests {
         s.apps.insert(1, Limits { priority: 2, ..Default::default() }); // high
         s.apps.insert(2, Limits { priority: 0, ..Default::default() }); // low
         // Exhaust the burst allowance first so everything queues.
-        s.admit(key(9), 20_000, || pkt(20_000));
+        s.admit(key(9), 20_000, 20_000, || pkt(20_000));
         for _ in 0..30 {
-            s.admit(key(1), 1500, || pkt(1500));
-            s.admit(key(2), 1500, || pkt(1500));
+            s.admit(key(1), 1500, 1500, || pkt(1500));
+            s.admit(key(2), 1500, 1500, || pkt(1500));
         }
         let mut out = Vec::new();
         let start = Instant::now();
@@ -583,18 +586,61 @@ mod tests {
         assert_eq!(s.match_conn(1, &super::super::packet::map_ipv4(&[11, 1, 2, 3]), 443, 6), 0);
         let mut k = key(1);
         k.conn = 1;
-        assert!(matches!(s.admit(k, 100, || pkt(100)), Decision::Drop));
+        assert!(matches!(s.admit(k, 100, 100, || pkt(100)), Decision::Drop));
         k.conn = 0;
-        assert!(matches!(s.admit(k, 100, || pkt(100)), Decision::Pass));
+        assert!(matches!(s.admit(k, 100, 100, || pkt(100)), Decision::Pass));
         // Adapter override replaces the PC limit (which is a block here).
         s.global.block_down = true;
         s.adapters.push(Limits::default());
-        assert!(matches!(s.admit(k, 100, || pkt(100)), Decision::Drop));
+        assert!(matches!(s.admit(k, 100, 100, || pkt(100)), Decision::Drop));
         k.adapter = 1;
-        assert!(matches!(s.admit(k, 100, || pkt(100)), Decision::Pass));
+        assert!(matches!(s.admit(k, 100, 100, || pkt(100)), Decision::Pass));
         // Master off passes everything.
         s.master = false;
         k.adapter = 0;
-        assert!(matches!(s.admit(k, 100, || pkt(100)), Decision::Pass));
+        assert!(matches!(s.admit(k, 100, 100, || pkt(100)), Decision::Pass));
+    }
+
+    #[test]
+    fn chain_app_hotspot_global_and_flush() {
+        // App bucket + hotspot bucket + global bucket all apply to a forwarded packet.
+        let mut s = Shaper {
+            global: Limits { down: Some(Bucket::new(1_000_000)), ..Default::default() },
+            hotspot: Limits { down: Some(Bucket::new(1_000_000)), ..Default::default() },
+            ..Default::default()
+        };
+        s.apps.insert(5, Limits { down: Some(Bucket::new(1_000)), ..Default::default() });
+        let mut k = key(5);
+        k.forward = true;
+        let mut chain = [Which::Global; 4];
+        assert_eq!(s.chain(&k, &mut chain), 3);
+        assert_eq!(&chain[..3], &[Which::App(5), Which::Hotspot, Which::Global]);
+        // The 1 kB/s app bucket is the bottleneck: the second packet queues.
+        assert!(matches!(s.admit(k, 1500, 1500, || pkt(1500)), Decision::Pass));
+        assert!(matches!(s.admit(k, 1500, 1500, || pkt(1500)), Decision::Queued));
+        assert_eq!(s.queued_bytes, 1500);
+        // Upload direction has no buckets at all → passes untouched.
+        let mut up = k;
+        up.dir = Dir::Up;
+        assert!(matches!(s.admit(up, 1500, 1500, || pkt(1500)), Decision::Pass));
+        // Removing every rule flushes what was waiting on the next pass.
+        s.apps.clear();
+        s.global.down = None;
+        s.hotspot.down = None;
+        let mut out = Vec::new();
+        s.schedule(&mut out);
+        assert_eq!(out.len(), 1);
+        assert_eq!(s.queued_bytes, 0);
+        assert!(!s.has_any_limit());
+    }
+
+    #[test]
+    fn payload_charge_is_what_the_bucket_pays() {
+        let mut s = Shaper { global: Limits { down: Some(Bucket::new(10_000)), ..Default::default() }, ..Default::default() };
+        // A 1500 B packet whose payload is 1000 B costs the bucket 1000 tokens.
+        assert!(matches!(s.admit(key(1), 1500, 1000, || pkt(1500)), Decision::Pass));
+        let tokens = s.global.down.as_ref().unwrap().tokens;
+        assert!(tokens <= -999.0 && tokens > -1001.0, "tokens {tokens}");
+        assert!(matches!(s.admit(key(1), 1500, 1000, || pkt(1500)), Decision::Queued));
     }
 }

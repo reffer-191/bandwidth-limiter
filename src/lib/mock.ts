@@ -58,6 +58,7 @@ const state = {
     notifyNewApp: false,
     notifyQuota: true,
     notifySchedule: true,
+    countHeaders: false,
   } as Config,
   history: [] as Sample[],
   totals: new Map<number, { dl: number; ul: number }>(),
@@ -188,7 +189,7 @@ setInterval(() => {
 }, 1000);
 
 export const mockApi = {
-  status: async (): Promise<Status> => ({ elevated: true, driverOk: true, driverError: null, forwardOk: true, forwardError: null, windivertPath: "(mock) WinDivert.dll", configPath: "(mock) config.json", packets: 123456, lastError: null }),
+  status: async (): Promise<Status> => ({ elevated: true, driverOk: true, driverError: null, forwardOk: true, forwardError: null, windivertPath: "(mock) WinDivert.dll", configPath: "(mock) config.json", packets: 123456, lastError: null, restarts: 0, sendErrors: 0, threads: 4, reattributed: 48213 }),
   config: async () => structuredClone(state.config),
   setConfig: async (c: Config) => {
     state.config = structuredClone(c);
@@ -234,6 +235,13 @@ export const mockApi = {
   },
   importRules: async () => null,
   testNotification: async () => alert("Notificación de prueba (mock)"),
+  diagnostics: async () => ({
+    version: "0.8.0", windows: "10.0.26200", uptimeSecs: 4242, queuedBytes: 0, dropped: 12, limiting: false, apps: APPS.length, flowsPending: false, adapters: 3, metered: false,
+    status: await mockApi.status(), configPath: "(mock) config.json", usagePath: "(mock) usage.db", logPath: "(mock) logs/app.log",
+    problems: ["2026-09-18 10:12:03.120 WARN  engine: recv (forward): Error 6 (mock)", "2026-09-18 10:12:18.004 WARN  notify: could not register AUMID (mock)"],
+    report: "Bandwidth Limiter 0.8.0 (mock report)\n--- log tail ---\n…",
+  }),
+  openLogFolder: async () => {},
   onTick: (l: Listener) => {
     state.listeners.add(l);
     return () => state.listeners.delete(l);

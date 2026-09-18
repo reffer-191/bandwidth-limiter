@@ -43,6 +43,8 @@ pub struct UsageStore {
     db: Option<Connection>,
     /// (key, hour) → bytes not yet written.
     pending: HashMap<(String, u32), (u64, u64)>,
+    /// (key, hour, dl, ul) to subtract on the next flush (re-attribution).
+    corrections: Vec<(String, u32, i64, i64)>,
     meta_dirty: Vec<String>,
 }
 
@@ -169,7 +171,9 @@ impl UsageStore {
             })();
             match r {
                 Ok(()) => {
-                    let _ = std::fs::rename(&legacy, legacy.with_extension("json.migrated"));
+                    if let Err(e) = std::fs::rename(&legacy, legacy.with_extension("json.migrated")) {
+                        log::warn!("usage: could not rename usage.json: {e}");
+                    }
                     log::info!("usage: migrated {} apps from usage.json", old.apps.len());
                 }
                 Err(e) => log::warn!("usage migration: {e}"),
@@ -215,7 +219,7 @@ impl UsageStore {
 
     /// Writes the pending deltas. Cheap when nothing changed.
     pub fn save(&mut self) -> Result<(), String> {
-        if self.pending.is_empty() && self.meta_dirty.is_empty() {
+        if self.pending.is_empty() && self.meta_dirty.is_empty() && self.corrections.is_empty() {
             return Ok(());
         }
         let Some(db) = self.db.as_mut() else { return Ok(()) };
@@ -236,6 +240,13 @@ impl UsageStore {
                 "INSERT INTO usage (key, hour, dl, ul) VALUES (?1, ?2, ?3, ?4)
                  ON CONFLICT(key, hour) DO UPDATE SET dl = dl + excluded.dl, ul = ul + excluded.ul",
                 params![key, hour as i64, dl as i64, ul as i64],
+            )
+            .map_err(|e| e.to_string())?;
+        }
+        for (key, hour, dl, ul) in self.corrections.drain(..) {
+            tx.execute(
+                "UPDATE usage SET dl = MAX(0, dl - ?3), ul = MAX(0, ul - ?4) WHERE key = ?1 AND hour = ?2",
+                params![key, hour as i64, dl, ul],
             )
             .map_err(|e| e.to_string())?;
         }
@@ -270,6 +281,33 @@ impl UsageStore {
         }
     }
 
+    /// Moves bytes already stored for `from` (this hour) to `to`; used when
+    /// a flow's owner is learnt after its first packets were counted as
+    /// "Unknown". Whatever is not in this hour's bucket stays where it is.
+    pub fn transfer(&mut self, from: &str, to_meta: &super::AppMeta, dl: u64, ul: u64, now_ms: u64) {
+        if dl + ul == 0 {
+            return;
+        }
+        let hour = hour_of(now_ms);
+        let (mut mdl, mut mul) = (0, 0);
+        if let Some(a) = self.apps.get_mut(from) {
+            if let Some(h) = a.hours.last_mut() {
+                if h.hour == hour {
+                    mdl = dl.min(h.dl);
+                    mul = ul.min(h.ul);
+                    h.dl -= mdl;
+                    h.ul -= mul;
+                }
+            }
+        }
+        if mdl + mul == 0 {
+            return;
+        }
+        // The database is updated with deltas: queue the subtraction.
+        self.corrections.push((from.to_string(), hour, mdl as i64, mul as i64));
+        self.add(&to_meta.key, to_meta, mdl, mul, now_ms);
+    }
+
     /// Drops hour buckets and apps outside the retention window.
     pub fn prune(&mut self, now_ms: u64) {
         let cutoff_hour = hour_of(now_ms).saturating_sub(RETENTION_DAYS * 24);
@@ -279,8 +317,14 @@ impl UsageStore {
         }
         self.apps.retain(|_, a| a.last_seen >= cutoff_ms);
         if let Some(db) = self.db.as_ref() {
-            let _ = db.execute("DELETE FROM usage WHERE hour < ?1", params![cutoff_hour as i64]);
-            let _ = db.execute("DELETE FROM apps WHERE last_seen < ?1", params![cutoff_ms as i64]);
+            for r in [
+                db.execute("DELETE FROM usage WHERE hour < ?1", params![cutoff_hour as i64]),
+                db.execute("DELETE FROM apps WHERE last_seen < ?1", params![cutoff_ms as i64]),
+            ] {
+                if let Err(e) = r {
+                    log::warn!("usage prune: {e}");
+                }
+            }
         }
     }
 

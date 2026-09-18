@@ -73,9 +73,9 @@ pub fn setup(app: &AppHandle, cfg: &Config) -> tauri::Result<()> {
 
 pub fn show_main(app: &AppHandle) {
     if let Some(win) = app.get_webview_window("main") {
-        let _ = win.show();
-        let _ = win.unminimize();
-        let _ = win.set_focus();
+        if let Err(e) = win.show().and_then(|_| win.unminimize()).and_then(|_| win.set_focus()) {
+            log::warn!("show main window: {e}");
+        }
     }
 }
 
@@ -89,14 +89,18 @@ fn toggle_master(app: &AppHandle) {
     let engine = app.state::<Engine>();
     let mut cfg = engine.state.config.read().clone();
     cfg.master = !cfg.master;
-    let _ = engine.set_config(cfg);
+    if let Err(e) = engine.set_config(cfg) {
+        log::warn!("tray toggle: {e}");
+    }
 }
 
 fn switch_profile(app: &AppHandle, name: &str) {
     let engine = app.state::<Engine>();
     let mut cfg = engine.state.config.read().clone();
     if cfg.switch_profile(name) {
-        let _ = engine.set_config(cfg);
+        if let Err(e) = engine.set_config(cfg) {
+            log::warn!("tray profile: {e}");
+        }
     } else {
         // Re-sync the check marks (the click toggled one visually).
         sync(app, &engine.state.config.read());
@@ -114,8 +118,13 @@ pub fn quit_app(app: &AppHandle) {
 /// language, limiter state and profiles all live there).
 pub fn sync(app: &AppHandle, cfg: &Config) {
     if let Some(tray) = app.tray_by_id(TRAY_ID) {
-        if let Ok(menu) = build_menu(app, cfg) {
-            let _ = tray.set_menu(Some(menu));
+        match build_menu(app, cfg) {
+            Ok(menu) => {
+                if let Err(e) = tray.set_menu(Some(menu)) {
+                    log::warn!("tray menu: {e}");
+                }
+            }
+            Err(e) => log::warn!("tray menu: {e}"),
         }
     }
 }

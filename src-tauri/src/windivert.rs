@@ -34,9 +34,6 @@ pub const PARAM_QUEUE_SIZE: u32 = 2;
 
 pub const SHUTDOWN_BOTH: u32 = 3;
 
-/// Maximum packet size WinDivert can hand us (IPv6 header + 64 KiB payload).
-pub const MTU_MAX: usize = 40 + 0xFFFF;
-
 /// Mirrors `WINDIVERT_ADDRESS` (80 bytes). The bit-field word is kept raw and
 /// decoded through accessors; the union is a raw 64 byte blob.
 #[repr(C)]
@@ -94,6 +91,8 @@ type FnSend = unsafe extern "C" fn(Handle, *const c_void, u32, *mut u32, *const 
 type FnShutdown = unsafe extern "C" fn(Handle, u32) -> i32;
 type FnClose = unsafe extern "C" fn(Handle) -> i32;
 type FnSetParam = unsafe extern "C" fn(Handle, u32, u64) -> i32;
+type FnRecvEx = unsafe extern "C" fn(Handle, *mut c_void, u32, *mut u32, u64, *mut Address, *mut u32, *mut c_void) -> i32;
+type FnSendEx = unsafe extern "C" fn(Handle, *const c_void, u32, *mut u32, u64, *const Address, u32, *mut c_void) -> i32;
 type FnHton = unsafe extern "C" fn(*const u32, *mut u32);
 
 pub struct WinDivert {
@@ -104,6 +103,8 @@ pub struct WinDivert {
     shutdown: FnShutdown,
     close: FnClose,
     set_param: FnSetParam,
+    recv_ex: FnRecvEx,
+    send_ex: FnSendEx,
     hton_ipv6: FnHton,
     pub path: PathBuf,
 }
@@ -153,9 +154,11 @@ impl WinDivert {
                     let shutdown = sym!("WinDivertShutdown", FnShutdown);
                     let close = sym!("WinDivertClose", FnClose);
                     let set_param = sym!("WinDivertSetParam", FnSetParam);
+                    let recv_ex = sym!("WinDivertRecvEx", FnRecvEx);
+                    let send_ex = sym!("WinDivertSendEx", FnSendEx);
                     let hton_ipv6 = sym!("WinDivertHelperHtonIpv6Address", FnHton);
                     return Ok(WinDivert {
-                        _lib: lib, open, recv, send, shutdown, close, set_param, hton_ipv6, path,
+                        _lib: lib, open, recv, send, shutdown, close, set_param, recv_ex, send_ex, hton_ipv6, path,
                     });
                 },
                 Err(e) => last_err = format!("{}: {e}", path.display()),
@@ -186,6 +189,31 @@ impl WinDivert {
     pub fn send(&self, h: Handle, pkt: &[u8], addr: &Address) -> io::Result<()> {
         let mut sent: u32 = 0;
         let ok = unsafe { (self.send)(h, pkt.as_ptr() as *const c_void, pkt.len() as u32, &mut sent, addr) };
+        if ok != 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+    }
+
+    /// Batched receive: fills `buf` with several packets back to back and
+    /// one address per packet. Returns (bytes, packets).
+    pub fn recv_ex(&self, h: Handle, buf: &mut [u8], addrs: &mut [Address]) -> io::Result<(usize, usize)> {
+        let mut len: u32 = 0;
+        let mut addr_len: u32 = (addrs.len() * std::mem::size_of::<Address>()) as u32;
+        let ok = unsafe {
+            (self.recv_ex)(h, buf.as_mut_ptr() as *mut c_void, buf.len() as u32, &mut len, 0, addrs.as_mut_ptr(), &mut addr_len, std::ptr::null_mut())
+        };
+        if ok != 0 {
+            Ok((len as usize, addr_len as usize / std::mem::size_of::<Address>()))
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    /// Batched send: `buf` holds the packets back to back, `addrs` one
+    /// address per packet.
+    pub fn send_ex(&self, h: Handle, buf: &[u8], addrs: &[Address]) -> io::Result<()> {
+        let mut sent: u32 = 0;
+        let ok = unsafe {
+            (self.send_ex)(h, buf.as_ptr() as *const c_void, buf.len() as u32, &mut sent, 0, addrs.as_ptr(), (addrs.len() * std::mem::size_of::<Address>()) as u32, std::ptr::null_mut())
+        };
         if ok != 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
     }
 

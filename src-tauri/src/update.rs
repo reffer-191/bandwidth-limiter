@@ -69,7 +69,9 @@ pub fn check_on_startup(app: AppHandle) {
     tauri::async_runtime::spawn(async move {
         tokio_sleep(8).await;
         if let Ok(Some(info)) = check(&app).await {
-            let _ = app.emit("update-available", info);
+            if let Err(e) = app.emit("update-available", info) {
+                log::warn!("emit update-available: {e}");
+            }
         }
     });
 }

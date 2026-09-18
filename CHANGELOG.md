@@ -4,6 +4,19 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.8.0] - 2026-09-18
+
+### Added
+- **Diagnostics** in *Settings*: capture engine state (threads, packets, queued/dropped, send errors, driver restarts, adapters, metered), the last warnings, a rotating log file (`%LOCALAPPDATA%\Bandwidth Limiter\logs\app.log`, 1 MB × 3) and a *Copy report* button that gathers everything for an issue.
+- **Watchdog**: if a capture thread dies (BFE restarted, driver unloaded by another tool) or the driver could not be opened at start, the engine re-opens WinDivert automatically every 15 s until it works.
+- **Retroactive attribution**: bytes of a brand-new connection that arrive before Windows reports its owner are parked for up to 10 s and moved from "Unknown" to the right application (live counters, statistics and quotas) as soon as the socket event lands.
+- *Settings → Engine → Count TCP/IP headers in limits* (off by default): limits and speeds are now measured on the payload, which is what download managers display, so a 1 Mbit/s limit reads as 1 Mbit/s; switch it on to shape and measure the wire length instead.
+- Unit tests for the packet parser, the flow table and the shaper chain (20 in total).
+
+### Changed
+- Packets are received and re-injected in batches (`WinDivertRecvEx`/`SendEx`, up to 64 per call) with a reusable buffer: fewer kernel round-trips and copies under load.
+- Errors that were silently ignored (driver parameters, re-injection failures, tray, window, usage database) are now counted or logged; the log replaces the console-only output.
+
 ## [0.7.2] - 2026-09-18
 
 ### Changed

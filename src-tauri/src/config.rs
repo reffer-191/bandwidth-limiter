@@ -236,6 +236,9 @@ pub struct Config {
     pub notify_new_app: bool,
     pub notify_quota: bool,
     pub notify_schedule: bool,
+    /// Charge the IP/TCP headers to the limits (wire speed) instead of only
+    /// the payload (what download managers display).
+    pub count_headers: bool,
 }
 
 impl Default for Config {
@@ -262,6 +265,7 @@ impl Default for Config {
             notify_new_app: false,
             notify_quota: true,
             notify_schedule: true,
+            count_headers: false,
         }
     }
 }

@@ -153,6 +153,8 @@ export interface Config {
   notifyNewApp: boolean;
   notifyQuota: boolean;
   notifySchedule: boolean;
+  /** charge IP/TCP headers to the limits (wire speed) instead of payload only */
+  countHeaders: boolean;
 }
 
 export interface Status {
@@ -166,6 +168,30 @@ export interface Status {
   /** packets seen by the capture threads since start */
   packets: number;
   lastError: string | null;
+  restarts: number;
+  sendErrors: number;
+  threads: number;
+  /** bytes first booked as Unknown and later moved to their app */
+  reattributed: number;
+}
+
+export interface Diagnostics {
+  version: string;
+  windows: string;
+  uptimeSecs: number;
+  status: Status;
+  queuedBytes: number;
+  dropped: number;
+  limiting: boolean;
+  apps: number;
+  flowsPending: boolean;
+  adapters: number;
+  metered: boolean;
+  configPath: string;
+  usagePath: string;
+  logPath: string;
+  problems: string[];
+  report: string;
 }
 
 export interface Adapter {
@@ -263,6 +289,8 @@ const tauriApi = {
   /** Open dialog; resolves to the new config or null when cancelled. */
   importRules: () => invoke<Config | null>("import_rules"),
   testNotification: () => invoke<void>("test_notification"),
+  diagnostics: () => invoke<Diagnostics>("get_diagnostics"),
+  openLogFolder: () => invoke<void>("open_log_folder"),
 };
 
 /** Outside Tauri (plain `vite` in a browser) fall back to the in-memory mock. */

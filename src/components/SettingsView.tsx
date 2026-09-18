@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { ExternalLink } from "lucide-react";
-import { api, type UpdateInfo } from "../lib/api";
+import { ExternalLink, Copy, FolderOpen, RefreshCw } from "lucide-react";
+import { api, type Diagnostics, type UpdateInfo } from "../lib/api";
 import { useEngine } from "../lib/engine";
 import { useT, type LangSetting } from "../lib/i18n";
 import { Segmented, Switch } from "./ui";
@@ -197,7 +197,13 @@ export function SettingsView() {
           <Row title={t("set.forward")} desc={t("set.forward.desc")}>
             <span className={`badge ${status?.forwardOk ? "green" : ""}`}>{status?.forwardOk ? t("set.active") : status?.forwardError ?? t("set.inactive")}</span>
           </Row>
+          <Row title={t("set.countHeaders")} desc={t("set.countHeaders.desc")}>
+            <Switch label={t("set.countHeaders")} on={config.countHeaders} onChange={(countHeaders) => updateConfig((c) => ({ ...c, countHeaders }))} />
+          </Row>
         </div>
+
+        <div className="section-title">{t("set.diag")}</div>
+        <DiagnosticsCard />
 
         <div className="section-title">{t("set.data")}</div>
         <div className="card">
@@ -235,6 +241,67 @@ export function SettingsView() {
           </Row>
         </div>
       </div>
+    </div>
+  );
+}
+
+function DiagnosticsCard() {
+  const t = useT();
+  const [d, setD] = useState<Diagnostics | null>(null);
+  const [copied, setCopied] = useState(false);
+  const load = () => api.diagnostics().then(setD).catch(() => {});
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 5000);
+    return () => clearInterval(id);
+  }, []);
+  const copy = async () => {
+    if (!d) return;
+    try {
+      await navigator.clipboard.writeText(d.report);
+    } catch {
+      const ta = document.createElement("textarea");
+      ta.value = d.report;
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand("copy");
+      ta.remove();
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+  const up = (s: number) => (s >= 3600 ? `${Math.floor(s / 3600)} h ${Math.floor((s % 3600) / 60)} min` : s >= 60 ? `${Math.floor(s / 60)} min` : `${s} s`);
+  if (!d) return <div className="card"><div className="empty">…</div></div>;
+  const st = d.status;
+  const healthy = st.driverOk && st.threads >= 3 && !st.lastError;
+  return (
+    <div className="card">
+      <Row title={t("set.diag.state")} desc={t("set.diag.state.desc", { uptime: up(d.uptimeSecs), windows: d.windows })}>
+        <span className={`badge ${healthy ? "green" : st.driverOk ? "" : "block"}`}>{healthy ? t("set.diag.ok") : st.driverOk ? t("set.diag.degraded") : t("set.inactive")}</span>
+      </Row>
+      <div className="diag-grid">
+        <span className="k">{t("set.diag.threads")}</span><span className="v">{st.threads} / 4</span>
+        <span className="k">{t("set.diag.packets")}</span><span className="v">{st.packets.toLocaleString()}</span>
+        <span className="k">{t("set.diag.queued")}</span><span className="v">{d.queuedBytes.toLocaleString()} B</span>
+        <span className="k">{t("set.diag.dropped")}</span><span className="v">{d.dropped.toLocaleString()}</span>
+        <span className="k">{t("set.diag.sendErrors")}</span><span className="v">{st.sendErrors.toLocaleString()}</span>
+        <span className="k">{t("set.diag.restarts")}</span><span className="v">{st.restarts}</span>
+        <span className="k">{t("set.diag.adapters")}</span><span className="v">{d.adapters}{d.metered ? ` · ${t("metered")}` : ""}</span>
+        <span className="k">{t("set.diag.log")}</span><span className="v mono" style={{ fontSize: 11 }}>{d.logPath}</span>
+      </div>
+      {(st.lastError || d.problems.length > 0) && (
+        <div className="diag-problems">
+          {st.lastError && <div className="line err">{st.lastError}</div>}
+          {d.problems.map((l, i) => <div className="line" key={i}>{l}</div>)}
+        </div>
+      )}
+      <Row title={t("set.diag.report")} desc={t("set.diag.report.desc")}>
+        <div style={{ display: "flex", gap: 8 }}>
+          <button className="btn ghost icon" onClick={load} title={t("net.refresh")} aria-label={t("net.refresh")}><RefreshCw /></button>
+          <button className="btn ghost" onClick={() => api.openLogFolder().catch(() => {})}><FolderOpen /> {t("set.diag.openLogs")}</button>
+          <button className="btn" onClick={copy}><Copy /> {copied ? t("set.diag.copied") : t("set.diag.copy")}</button>
+        </div>
+      </Row>
     </div>
   );
 }

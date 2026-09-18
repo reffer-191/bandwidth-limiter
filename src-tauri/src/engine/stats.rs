@@ -86,6 +86,22 @@ impl Default for Stats {
 }
 
 impl Stats {
+    /// Moves bytes counted for `from` (the "Unknown" pseudo-app) to `to`
+    /// once the flow's owner became known. Both the counters and the
+    /// previous snapshot move, so the per-tick deltas (which feed the usage
+    /// store) are not disturbed; the usage store is corrected separately.
+    pub fn reattribute(&mut self, from: AppId, to: AppId, dl: u64, ul: u64) {
+        for c in [&mut self.counters, &mut self.prev] {
+            if let Some(b) = c.by_app.get_mut(&from) {
+                b.dl = b.dl.saturating_sub(dl);
+                b.ul = b.ul.saturating_sub(ul);
+            }
+            let b = c.by_app.entry(to).or_default();
+            b.dl += dl;
+            b.ul += ul;
+        }
+    }
+
     /// Computes rates since the previous tick and appends a history sample.
     /// Returns the sample and the per-app rates (all apps, not just top).
     pub fn tick(&mut self, ts: u64, secs: f64) -> (Sample, HashMap<AppId, (Rate, Bytes)>) {
