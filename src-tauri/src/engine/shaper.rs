@@ -167,6 +167,8 @@ pub struct QueuedPacket {
     /// Bytes charged to the buckets (payload, or the wire length when
     /// headers are counted).
     pub charge: usize,
+    /// Belongs to a hotspot client (counts toward the hotspot totals).
+    pub hotspot: bool,
 }
 
 #[derive(Default)]
@@ -516,7 +518,7 @@ mod tests {
     }
 
     fn pkt(len: usize) -> QueuedPacket {
-        QueuedPacket { data: vec![0; len], addr: Address::default(), forward: false, app: 0, outbound: false, internet: true, charge: len }
+        QueuedPacket { data: vec![0; len], addr: Address::default(), forward: false, app: 0, outbound: false, internet: true, charge: len, hotspot: false }
     }
 
     fn drain(s: &mut Shaper, out: &mut Vec<QueuedPacket>) {

@@ -84,15 +84,16 @@ impl Apps {
         (id, created)
     }
 
-    fn device(&mut self, ip: &packet::Addr16) -> (AppId, bool) {
-        // Only private addresses can be hotspot clients; anything else
-        // (transit traffic, odd forwards) goes to one generic device row.
-        let ip = if packet::is_local(ip) { packet::addr_to_string(ip) } else { "?".to_string() };
+    /// Hotspot client row for an address, or the generic "forwarded
+    /// traffic" row when the address is not a hotspot client.
+    fn device(&mut self, ip: Option<&packet::Addr16>) -> (AppId, bool) {
+        let ip = ip.map(packet::addr_to_string).unwrap_or_else(|| "?".to_string());
         let key = format!("hotspot:{ip}");
         if let Some(&id) = self.by_key.get(&key) {
             return (id, false);
         }
-        self.register(key, ip, "Dispositivo conectado al hotspot".into(), String::new(), true)
+        // Description stays empty until reverse DNS gives the device a name.
+        self.register(key, ip, String::new(), String::new(), true)
     }
 
     fn prune_dead(&mut self) {
@@ -493,19 +494,28 @@ impl State {
             }
             return;
         };
+        // Forwarded traffic: "download" means heading to a hotspot client.
+        // Only addresses on the hotspot subnet are devices; anything else
+        // the PC forwards (WSL / Hyper-V / VPN networks) is accounted as
+        // ordinary traffic under one generic row and is not subject to the
+        // hotspot limit.
+        let mut hotspot_client = false;
         let (outbound, local, local_port, remote, remote_port) = if forward {
-            // Forwarded traffic: "download" means heading to a hotspot client.
-            // The client is the private/on-link side; a public address can
-            // never be a device, whatever the adapter table says (it lags a
-            // few seconds behind when the hotspot is switched on).
-            let (src_local, dst_local) = {
+            let (src_dev, dst_dev) = {
                 let a = self.adapters.read();
-                (packet::is_local(&p.src) || a.is_on_link(&p.src), packet::is_local(&p.dst) || a.is_on_link(&p.dst))
+                (a.is_hotspot_client(&p.src), a.is_hotspot_client(&p.dst))
             };
-            let to_client = match (src_local, dst_local) {
-                (false, true) => true,
-                (true, false) => false,
-                _ => self.adapters.read().is_on_link(&p.dst),
+            hotspot_client = src_dev || dst_dev;
+            let to_client = if dst_dev && !src_dev {
+                true
+            } else if src_dev && !dst_dev {
+                false
+            } else {
+                // Neither side is a hotspot client: the private/on-link side
+                // is "ours".
+                let a = self.adapters.read();
+                let (sl, dl) = (packet::is_local(&p.src) || a.is_on_link(&p.src), packet::is_local(&p.dst) || a.is_on_link(&p.dst));
+                dl && !sl
             };
             if to_client {
                 (false, p.dst, p.dst_port, p.src, p.src_port)
@@ -524,7 +534,7 @@ impl State {
         // whole packet when the user asked to count headers.
         let charge = if self.count_headers.load(Ordering::Relaxed) { len } else { p.payload_len(len) };
         let (app, created) = if forward {
-            self.apps.lock().device(&local)
+            self.apps.lock().device(if hotspot_client { Some(&local) } else { None })
         } else {
             let key = FlowKey { protocol: p.protocol, local, local_port, remote, remote_port };
             let (pid, pending) = {
@@ -555,15 +565,15 @@ impl State {
             let mut sh = self.shaper.lock();
             let conn = if sh.matchers.is_empty() { 0 } else { sh.match_conn(app, &remote, remote_port, p.protocol) };
             let adapter = if forward || sh.if_map.is_empty() { 0 } else { sh.adapter_for(addr.if_idx()) };
-            let key = QueueKey { app, dir: if outbound { Dir::Up } else { Dir::Down }, forward, internet, conn, adapter };
-            sh.admit(key, len, charge, || QueuedPacket { data: pkt.to_vec(), addr, forward, app, outbound, internet, charge })
+            let key = QueueKey { app, dir: if outbound { Dir::Up } else { Dir::Down }, forward: hotspot_client, internet, conn, adapter };
+            sh.admit(key, len, charge, || QueuedPacket { data: pkt.to_vec(), addr, forward, app, outbound, internet, charge, hotspot: hotspot_client })
         };
         // Traffic is accounted when it is delivered (here, or by the
         // scheduler for queued packets), never when it is dropped, so the
         // chart and the quotas reflect what the limiter lets through.
         match decision {
             Decision::Pass => {
-                self.stats.lock().counters.record(app, outbound, charge, internet, forward);
+                self.stats.lock().counters.record(app, outbound, charge, internet, hotspot_client);
                 if w.send(handle, pkt, &addr).is_err() {
                     self.status.lock().send_errors += 1;
                 }
@@ -853,7 +863,7 @@ fn scheduler_loop(state: Arc<State>) {
                 {
                     let mut stats = state.stats.lock();
                     for p in out.iter() {
-                        stats.counters.record(p.app, p.outbound, p.charge, p.internet, p.forward);
+                        stats.counters.record(p.app, p.outbound, p.charge, p.internet, p.hotspot);
                     }
                 }
                 // One WinDivertSendEx per handle: the packets are copied back
@@ -1082,6 +1092,33 @@ fn build_tick(state: &State, sample: &Sample, per_app: &HashMap<AppId, (Rate, By
     }
 }
 
+/// Reverse-DNS the hotspot clients seen recently so the list shows
+/// "Galaxy-S23 · 192.168.137.71" instead of a bare address (the ICS DNS
+/// proxy knows the names the phones sent with their DHCP request).
+fn resolve_device_names(state: &Arc<State>) {
+    let targets: Vec<(AppId, String)> = {
+        let apps = state.apps.lock();
+        apps.list
+            .iter()
+            .filter(|m| m.is_device && m.description.is_empty() && m.name != "?" && !m.pids.contains(&u32::MAX))
+            .map(|m| (m.id, m.name.clone()))
+            .collect()
+    };
+    for (id, ip) in targets {
+        let Ok(addr) = ip.parse::<std::net::IpAddr>() else { continue };
+        let name = adapters::reverse_lookup(addr);
+        let mut apps = state.apps.lock();
+        if let Some(m) = apps.list.get_mut(id as usize) {
+            match name {
+                Some(n) if n != ip => m.description = n,
+                // Mark as tried (pids are meaningless for devices) so we do
+                // not hammer the resolver every 5 minutes.
+                _ => m.pids.push(u32::MAX),
+            }
+        }
+    }
+}
+
 /// Resolves the host names used by connection rules (every 5 minutes and
 /// whenever the rules change) so the matchers can compare addresses.
 fn resolver_loop(state: Arc<State>) {
@@ -1094,6 +1131,7 @@ fn resolver_loop(state: Arc<State>) {
             continue;
         }
         last = Instant::now();
+        resolve_device_names(&state);
         let hosts: Vec<String> = state
             .config
             .read()

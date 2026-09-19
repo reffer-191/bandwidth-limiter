@@ -31,6 +31,12 @@ pub struct AdapterInfo {
     pub on_link: Vec<(Addr16, u8)>,
     /// Interface index (IPv4 and IPv6 ones) → position in `adapters`.
     pub by_index: HashMap<u32, usize>,
+    /// Prefixes of the mobile-hotspot / ICS adapter(s): only addresses in
+    /// there are "devices". Windows always uses 192.168.137.0/24 for ICS, so
+    /// that one is present even before the adapter shows up.
+    pub hotspot: Vec<(Addr16, u8)>,
+    /// Addresses of this PC's own adapters (never devices).
+    pub own: Vec<Addr16>,
     /// True when Windows reports the current Internet connection as metered.
     pub metered: bool,
 }
@@ -39,6 +45,11 @@ impl AdapterInfo {
     /// True when `addr` is directly reachable through one of our adapters.
     pub fn is_on_link(&self, addr: &Addr16) -> bool {
         self.on_link.iter().any(|(net, plen)| prefix_matches(net, addr, *plen))
+    }
+
+    /// True for a client of the mobile hotspot (not this PC itself).
+    pub fn is_hotspot_client(&self, addr: &Addr16) -> bool {
+        !self.own.contains(addr) && self.hotspot.iter().any(|(net, plen)| prefix_matches(net, addr, *plen))
     }
 }
 
@@ -62,6 +73,38 @@ pub fn prefix_matches(net: &Addr16, addr: &Addr16, plen: u8) -> bool {
     }
     let mask = 0xffu8 << (8 - rem);
     (a[full] & mask) == (b[full] & mask)
+}
+
+/// Reverse DNS with the resolver Windows uses (`GetNameInfoW`, NI_NAMEREQD).
+pub fn reverse_lookup(ip: std::net::IpAddr) -> Option<String> {
+    use windows_sys::Win32::Networking::WinSock::{GetNameInfoW, NI_NAMEREQD, SOCKADDR_IN, SOCKADDR_IN6, WSAStartup, WSADATA, SOCKADDR};
+    unsafe {
+        let mut wsa: WSADATA = std::mem::zeroed();
+        WSAStartup(0x202, &mut wsa);
+        let mut host = [0u16; 256];
+        let r = match ip {
+            std::net::IpAddr::V4(v4) => {
+                let mut sa: SOCKADDR_IN = std::mem::zeroed();
+                sa.sin_family = AF_INET;
+                sa.sin_addr.S_un.S_addr = u32::from_ne_bytes(v4.octets());
+                GetNameInfoW(&sa as *const _ as *const SOCKADDR, std::mem::size_of::<SOCKADDR_IN>() as i32, host.as_mut_ptr(), host.len() as u32, std::ptr::null_mut(), 0, NI_NAMEREQD as i32)
+            }
+            std::net::IpAddr::V6(v6) => {
+                let mut sa: SOCKADDR_IN6 = std::mem::zeroed();
+                sa.sin6_family = AF_INET6;
+                sa.sin6_addr.u.Byte = v6.octets();
+                GetNameInfoW(&sa as *const _ as *const SOCKADDR, std::mem::size_of::<SOCKADDR_IN6>() as i32, host.as_mut_ptr(), host.len() as u32, std::ptr::null_mut(), 0, NI_NAMEREQD as i32)
+            }
+        };
+        if r != 0 {
+            return None;
+        }
+        let len = host.iter().position(|&c| c == 0).unwrap_or(0);
+        let name = String::from_utf16_lossy(&host[..len]);
+        // ICS answers "<name>.mshome.net"; keep the short name.
+        let short = name.split('.').next().unwrap_or(&name).trim().to_string();
+        (!short.is_empty()).then_some(short)
+    }
 }
 
 unsafe fn pwstr(p: *const u16) -> String {
@@ -88,6 +131,7 @@ fn kind_of(if_type: u32) -> &'static str {
 
 pub fn enumerate() -> AdapterInfo {
     let mut info = AdapterInfo::default();
+    info.hotspot.push((map_ipv4(&[192, 168, 137, 0]), 24));
     unsafe {
         let flags = GAA_FLAG_SKIP_ANYCAST | GAA_FLAG_SKIP_MULTICAST | GAA_FLAG_SKIP_DNS_SERVER;
         let mut size: u32 = 32 * 1024;
@@ -145,8 +189,12 @@ pub fn enumerate() -> AdapterInfo {
                 || addresses.iter().any(|s| s.starts_with("192.168.137.1/"));
             let kind = kind_of(a.IfType);
             if kind != "loopback" {
+                info.own.extend(prefixes.iter().map(|(a, _)| *a));
                 if up {
                     info.on_link.extend(prefixes.iter().copied());
+                    if is_hotspot {
+                        info.hotspot.extend(prefixes.iter().copied());
+                    }
                 }
                 info.by_index.insert(if_index, info.adapters.len());
                 if a.Ipv6IfIndex != 0 {
@@ -204,5 +252,23 @@ pub fn is_metered() -> bool {
             CoUninitialize();
         }
         metered
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reverse_lookup_does_not_panic() {
+        // Loopback usually resolves to the machine name; either way no panic.
+        let _ = reverse_lookup("127.0.0.1".parse().unwrap());
+        let info = enumerate();
+        let own = info.own.first().copied();
+        if let Some(o) = own {
+            assert!(!info.is_hotspot_client(&o), "own addresses are never devices");
+        }
+        assert!(info.is_hotspot_client(&map_ipv4(&[192, 168, 137, 42])));
+        assert!(!info.is_hotspot_client(&map_ipv4(&[192, 168, 28, 128])));
     }
 }

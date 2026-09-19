@@ -15,7 +15,8 @@ export function appName(a: Pick<AppRate, "key" | "name">, t: T): string {
 export function appDescription(a: Pick<AppRate, "key" | "description" | "isDevice">, t: T): string {
   if (a.key === "unknown") return t("app.unknown.desc");
   if (a.key === "system") return t("app.system.desc");
-  if (a.isDevice) return t("app.device.desc");
+  if (a.key === "hotspot:?") return t("app.hotspotOther.desc");
+  if (a.isDevice) return a.description ? `${a.description} · ${t("app.device.desc")}` : t("app.device.desc");
   return a.description;
 }
 

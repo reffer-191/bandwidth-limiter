@@ -182,8 +182,9 @@ impl UsageStore {
         }
     }
 
-    /// Versions before 0.8.1 could record public addresses as hotspot
-    /// "devices" (direction guessed wrong); remove them for good.
+    /// Versions before 0.8.2 could record public addresses, the PC's own
+    /// hotspot address or other forwarded networks as hotspot "devices";
+    /// remove them for good.
     fn drop_bogus_devices(&mut self) {
         let Some(db) = self.db.as_ref() else { return };
         let keys: Vec<String> = db
@@ -193,11 +194,16 @@ impl UsageStore {
         let bogus: Vec<String> = keys
             .into_iter()
             .filter(|k| {
+                // Devices live on the ICS subnet (192.168.137.0/24) and are
+                // never the PC itself (.1); the "?" row is the generic one.
                 let ip = &k["hotspot:".len()..];
                 match ip.parse::<std::net::IpAddr>() {
-                    Ok(std::net::IpAddr::V4(v4)) => !super::packet::is_local(&super::packet::map_ipv4(&v4.octets())),
-                    Ok(std::net::IpAddr::V6(v6)) => !super::packet::is_local(&v6.octets()),
-                    Err(_) => false,
+                    Ok(std::net::IpAddr::V4(v4)) => {
+                        let o = v4.octets();
+                        !(o[0] == 192 && o[1] == 168 && o[2] == 137 && o[3] != 1)
+                    }
+                    Ok(std::net::IpAddr::V6(_)) => true,
+                    Err(_) => ip != "?",
                 }
             })
             .collect();
@@ -209,7 +215,7 @@ impl UsageStore {
             }
         }
         if !bogus.is_empty() {
-            log::info!("usage: removed {} public addresses recorded as hotspot devices", bogus.len());
+            log::info!("usage: removed {} rows that were not hotspot devices", bogus.len());
         }
     }
 

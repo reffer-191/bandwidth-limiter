@@ -4,6 +4,14 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.8.2] - 2026-09-19
+
+### Fixed
+- Only addresses on the mobile-hotspot subnet (192.168.137.0/24 or the Wi-Fi Direct adapter's network) are listed as devices, never the PC's own 192.168.137.1. Everything else the PC forwards (WSL, Hyper-V, VPN networks) is one generic *Forwarded traffic (other networks)* row and is not subject to the hotspot limit. Stale rows are removed from the history on start.
+
+### Added
+- Hotspot devices get a name: the app reverse-resolves each client through the hotspot's DNS (`Galaxy-S23 · Device connected to the hotspot`) a few seconds after it appears.
+
 ## [0.8.1] - 2026-09-18
 
 ### Fixed
