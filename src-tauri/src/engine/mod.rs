@@ -1145,7 +1145,7 @@ fn build_tick(state: &State, sample: &Sample, per_app: &HashMap<AppId, (Rate, By
 }
 
 /// Reverse-DNS the hotspot clients seen recently so the list shows
-/// "Galaxy-S23 · 192.168.137.71" instead of a bare address (the ICS DNS
+/// "<device name> · 192.168.137.x" instead of a bare address (the ICS DNS
 /// proxy knows the names the phones sent with their DHCP request).
 fn resolve_device_names(state: &Arc<State>) {
     // Names Windows already knows (tethering client list).

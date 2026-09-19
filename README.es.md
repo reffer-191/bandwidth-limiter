@@ -49,7 +49,7 @@ Descarga cualquiera de los dos desde la página de [Releases](../../releases).
 ## Cómo se usa
 
 ### Actividad
-Las velocidades se actualizan cada segundo. Las cuatro tarjetas muestran descarga/subida totales, tráfico de la red local y del hotspot. La lista de aplicaciones es estable: ordena por **Nombre**, **Descarga** o **Subida** (acumulado de los últimos 30 días); vuelve a pulsar la misma cabecera para invertir el orden. **Activas** oculta las aplicaciones sin tráfico; el buscador filtra por nombre, descripción o ruta.
+Las velocidades se actualizan cada segundo. Las cuatro tarjetas muestran descarga/subida totales, tráfico de la red local y del hotspot. Ordena la lista de aplicaciones por **Nombre**, **Descarga** o **Subida**; vuelve a pulsar la misma cabecera para invertir el orden. Con Descarga/Subida eliges la base: **Ahora** (la velocidad actual, promediada en 5 s para que las filas se asienten en vez de saltar cada segundo) o **30 días** (consumo acumulado, orden fijo). **Activas** oculta las aplicaciones sin tráfico; el buscador filtra por nombre, descripción o ruta.
 
 Haz clic en una aplicación para abrir su panel de detalle: velocidad actual, totales de 30 días, PID, ruta, conexiones activas y el **editor de reglas**.
 

@@ -16,6 +16,18 @@ interface Sort {
 }
 
 const SORT_STORAGE = "sort:activity";
+const BASIS_STORAGE = "sort:basis";
+/** What Download/Upload sort by: the current speed (5 s average) or the 30-day total. */
+type Basis = "now" | "total";
+/** Samples averaged for the "now" ordering, so rows do not jump every second. */
+const NOW_WINDOW = 5;
+function loadBasis(): Basis {
+  try {
+    const v = localStorage.getItem(BASIS_STORAGE);
+    if (v === "now" || v === "total") return v;
+  } catch {}
+  return "now";
+}
 const DEFAULT_DIR: Record<SortKey, Dir> = { name: 1, dl: -1, ul: -1 };
 function loadSort(): Sort {
   try {
@@ -47,6 +59,13 @@ export function ActivityView({ filter, selected, onSelect }: {
     });
   };
   const arrow = (k: SortKey) => (sort.key === k ? (sort.dir === 1 ? " ↑" : " ↓") : "");
+  const [basis, setBasisState] = useState<Basis>(loadBasis);
+  const setBasis = (b: Basis) => {
+    setBasisState(b);
+    try {
+      localStorage.setItem(BASIS_STORAGE, b);
+    } catch {}
+  };
   const [showIdle, setShowIdle] = useState(true);
   /** Instant frozen by clicking the chart; the table then shows that moment. */
   const [pinned, setPinned] = useState<Sample | null>(null);
@@ -55,6 +74,21 @@ export function ActivityView({ filter, selected, onSelect }: {
   useEffect(() => {
     if (config) setMinutes(config.historyMinutes);
   }, [config?.historyMinutes]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** Per-app speed averaged over the last few seconds (for the "now" ordering). */
+  const recent = useMemo(() => {
+    const m = new Map<number, { dl: number; ul: number }>();
+    const slice = history.slice(-NOW_WINDOW);
+    for (const s of slice) {
+      for (const [id, r] of s.top) {
+        const e = m.get(id) ?? { dl: 0, ul: 0 };
+        e.dl += r.dl / NOW_WINDOW;
+        e.ul += r.ul / NOW_WINDOW;
+        m.set(id, e);
+      }
+    }
+    return m;
+  }, [history]);
 
   const apps = useMemo(() => {
     let list = tick?.apps ?? [];
@@ -70,13 +104,12 @@ export function ActivityView({ filter, selected, onSelect }: {
     const q = filter.trim().toLowerCase();
     if (q) list = list.filter((a) => appName(a, t).toLowerCase().includes(q) || appDescription(a, t).toLowerCase().includes(q) || a.exe.toLowerCase().includes(q));
     if (!showIdle) list = list.filter((a) => a.dl + a.ul > 0 || a.online);
-    // Static ordering: by name, or by *accumulated* 30-day usage (never by
-    // the live rate, which would reshuffle the rows every second).
     const byName = (a: AppRate, b: AppRate) => appName(a, t).localeCompare(appName(b, t), undefined, { sensitivity: "base" }) || a.key.localeCompare(b.key);
-    // Live view ranks by accumulated 30-day usage; a pinned snapshot ranks by
-    // the rates of that instant (both are stable, unlike live rates).
-    const dlOf = (a: AppRate) => (pinned ? a.dl : a.totalDl);
-    const ulOf = (a: AppRate) => (pinned ? a.ul : a.totalUl);
+    // A pinned snapshot ranks by the rates of that instant; live, either by
+    // the current speed (averaged over a few seconds so rows settle) or by
+    // the accumulated 30-day usage.
+    const dlOf = (a: AppRate) => (pinned ? a.dl : basis === "now" ? recent.get(a.id)?.dl ?? 0 : a.totalDl);
+    const ulOf = (a: AppRate) => (pinned ? a.ul : basis === "now" ? recent.get(a.id)?.ul ?? 0 : a.totalUl);
     const cmp = (a: AppRate, b: AppRate) => {
       let c: number;
       switch (sort.key) {
@@ -92,7 +125,7 @@ export function ActivityView({ filter, selected, onSelect }: {
       return c * sort.dir || byName(a, b);
     };
     return [...list].sort(cmp);
-  }, [tick, filter, sort, showIdle, pinned, t]);
+  }, [tick, filter, sort, basis, recent, showIdle, pinned, t]);
 
   const selectedApp = selected ? appsById.get(keyToId(selected, appsById)) ?? null : null;
 
@@ -179,7 +212,7 @@ export function ActivityView({ filter, selected, onSelect }: {
             <span className="faint">{apps.length}</span>
             <span className="faint keys-hint" title={t("keys.hint")}>⌨</span>
             <div className="spacer" />
-            <span className="faint" style={{ fontSize: 11.5 }} title={pinned ? t("sort.hintPinned") : t("sort.hintLive")}>{t("sort")}</span>
+            <span className="faint" style={{ fontSize: 11.5 }} title={pinned ? t("sort.hintPinned") : basis === "now" ? t("sort.hintNow") : t("sort.hintLive")}>{t("sort")}</span>
             <Segmented<SortKey>
               value={sort.key}
               onChange={toggleSort}
@@ -190,6 +223,16 @@ export function ActivityView({ filter, selected, onSelect }: {
                 { value: "ul", label: `${t("upload")}${arrow("ul")}` },
               ]}
             />
+            {sort.key !== "name" && !pinned && (
+              <Segmented<Basis>
+                value={basis}
+                onChange={setBasis}
+                options={[
+                  { value: "now", label: t("sort.basis.now") },
+                  { value: "total", label: t("sort.basis.total") },
+                ]}
+              />
+            )}
             <Segmented<string>
               value={showIdle ? "all" : "active"}
               onChange={(v) => setShowIdle(v === "all")}
@@ -204,8 +247,8 @@ export function ActivityView({ filter, selected, onSelect }: {
               <thead>
                 <tr>
                   <th className="sortable" onClick={() => toggleSort("name")}>{t("col.name")}{arrow("name")}</th>
-                  <th className="num sortable" onClick={() => toggleSort("dl")} title={pinned ? t("sort.byDl.pinned") : t("sort.byDl.live")}>{t("download")}{arrow("dl")}</th>
-                  <th className="num sortable" onClick={() => toggleSort("ul")} title={pinned ? t("sort.byUl.pinned") : t("sort.byUl.live")}>{t("upload")}{arrow("ul")}</th>
+                  <th className="num sortable" onClick={() => toggleSort("dl")} title={pinned ? t("sort.byDl.pinned") : basis === "now" ? t("sort.byDl.now") : t("sort.byDl.live")}>{t("download")}{arrow("dl")}</th>
+                  <th className="num sortable" onClick={() => toggleSort("ul")} title={pinned ? t("sort.byUl.pinned") : basis === "now" ? t("sort.byUl.now") : t("sort.byUl.live")}>{t("upload")}{arrow("ul")}</th>
                   <th className="num" title={t("col.30d.hint")}>{t("col.30d")}</th>
                   <th className="num">{t("col.rules")}</th>
                 </tr>

@@ -49,7 +49,7 @@ Grab either one from the [Releases](../../releases) page.
 ## Using it
 
 ### Activity
-Speeds update every second. The four tiles show total download/upload, local-network traffic and hotspot traffic. The application list is stable: sort by **Name**, **Download** or **Upload** (accumulated over the last 30 days); click the same header again to reverse the order. **Active** hides idle applications; the search box filters by name, description or path.
+Speeds update every second. The four tiles show total download/upload, local-network traffic and hotspot traffic. Sort the application list by **Name**, **Download** or **Upload**; click the same header again to reverse the order. With Download/Upload you choose the basis: **Now** (the current speed, averaged over 5 s so rows settle instead of jumping every second) or **30 days** (accumulated usage, a fixed order). **Active** hides idle applications; the search box filters by name, description or path.
 
 Click an application to open its detail panel: current speed, 30-day totals, PID, path, active connections and the **rule editor**.
 

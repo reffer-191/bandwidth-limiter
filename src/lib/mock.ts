@@ -25,7 +25,7 @@ const APPS: Omit<AppRate, "dl" | "ul" | "totalDl" | "totalUl" | "lastSeen" | "on
   { id: 2, key: "c:\\users\\fer\\appdata\\roaming\\spotify\\spotify.exe", name: "Spotify.exe", description: "Spotify", exe: "C:\\Users\\Fer\\AppData\\Roaming\\Spotify\\Spotify.exe", pids: [9921], isDevice: false },
   { id: 3, key: "c:\\windows\\system32\\svchost.exe", name: "svchost.exe", description: "Host Process for Windows Services", exe: "C:\\Windows\\System32\\svchost.exe", pids: [1204, 1388, 2210], isDevice: false },
   { id: 4, key: "system", name: "System", description: "Núcleo de Windows (SMB, actualizaciones, etc.)", exe: "", pids: [4], isDevice: false },
-  { id: 5, key: "hotspot:24:29:34:9a:e2:bd", name: "Pixel-6a", description: "192.168.137.71", exe: "", pids: [], isDevice: true },
+  { id: 5, key: "hotspot:02:00:00:aa:bb:cc", name: "Phone-1", description: "192.168.137.23", exe: "", pids: [], isDevice: true },
   { id: 6, key: "c:\\program files\\qbittorrent\\qbittorrent.exe", name: "qbittorrent.exe", description: "qBittorrent", exe: "C:\\Program Files\\qBittorrent\\qbittorrent.exe", pids: [], isDevice: false },
   ...[
     ["Discord.exe", "Discord"], ["steam.exe", "Steam"], ["Teams.exe", "Microsoft Teams"], ["OneDrive.exe", "Microsoft OneDrive"],

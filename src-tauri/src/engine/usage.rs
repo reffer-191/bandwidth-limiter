@@ -578,16 +578,16 @@ mod tests {
     fn rename_merges_history() {
         let mut s = UsageStore::in_memory();
         let now = 300 * DAY_MS;
-        s.add("hotspot:192.168.137.71", &meta("192.168.137.71"), 100, 10, now);
-        s.add("hotspot:24:29:34:9a:e2:bd", &meta("Pixel"), 5, 5, now);
-        s.add("hotspot:192.168.137.71", &meta("192.168.137.71"), 50, 5, now - HOUR_MS);
-        s.rename("hotspot:192.168.137.71", "hotspot:24:29:34:9a:e2:bd");
-        assert!(s.apps.get("hotspot:192.168.137.71").is_none());
-        assert_eq!(s.sum_since("hotspot:24:29:34:9a:e2:bd", now - DAY_MS), (155, 20));
+        s.add("hotspot:192.168.137.23", &meta("192.168.137.23"), 100, 10, now);
+        s.add("hotspot:02:00:00:aa:bb:cc", &meta("Phone"), 5, 5, now);
+        s.add("hotspot:192.168.137.23", &meta("192.168.137.23"), 50, 5, now - HOUR_MS);
+        s.rename("hotspot:192.168.137.23", "hotspot:02:00:00:aa:bb:cc");
+        assert!(s.apps.get("hotspot:192.168.137.23").is_none());
+        assert_eq!(s.sum_since("hotspot:02:00:00:aa:bb:cc", now - DAY_MS), (155, 20));
         s.save().unwrap();
         let mut back = UsageStore { db: s.db.take(), ..Default::default() };
         back.read_all().unwrap();
-        assert!(back.apps.get("hotspot:192.168.137.71").is_none());
-        assert_eq!(back.sum_since("hotspot:24:29:34:9a:e2:bd", now - DAY_MS), (155, 20));
+        assert!(back.apps.get("hotspot:192.168.137.23").is_none());
+        assert_eq!(back.sum_since("hotspot:02:00:00:aa:bb:cc", now - DAY_MS), (155, 20));
     }
 }

@@ -4,10 +4,15 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.8.4] - 2026-09-19
+
+### Added
+- Sorting by Download/Upload can follow the **current speed** (averaged over 5 s so rows settle) or the **30-day total**; a *Now / 30 days* switch next to the sort buttons picks the basis and is remembered.
+
 ## [0.8.3] - 2026-09-19
 
 ### Changed
-- Hotspot devices are identified the way Windows does it: through the mobile-hotspot client list (MAC address, current address, name). A phone is one row — "Pixel-6a" — however many addresses DHCP handed it over the month; rows recorded earlier under an address are merged into the device when it reconnects, and the green dot means "connected to the hotspot right now", not "seen once". Without that list (hotspot off) devices fall back to their address and to "moved bytes in the last 30 s".
+- Hotspot devices are identified the way Windows does it: through the mobile-hotspot client list (MAC address, current address, name). A phone is one row — its name — however many addresses DHCP handed it over the month; rows recorded earlier under an address are merged into the device when it reconnects, and the green dot means "connected to the hotspot right now", not "seen once". Without that list (hotspot off) devices fall back to their address and to "moved bytes in the last 30 s".
 - The *Active* filter uses the same notion for devices, so idle or disconnected phones no longer show up as active.
 
 ## [0.8.2] - 2026-09-19
@@ -16,7 +21,7 @@ All notable changes to this project are documented here. The format follows [Kee
 - Only addresses on the mobile-hotspot subnet (192.168.137.0/24 or the Wi-Fi Direct adapter's network) are listed as devices, never the PC's own 192.168.137.1. Everything else the PC forwards (WSL, Hyper-V, VPN networks) is one generic *Forwarded traffic (other networks)* row and is not subject to the hotspot limit. Stale rows are removed from the history on start.
 
 ### Added
-- Hotspot devices get a name: the app reverse-resolves each client through the hotspot's DNS (`Galaxy-S23 · Device connected to the hotspot`) a few seconds after it appears.
+- Hotspot devices get a name: the app reverse-resolves each client through the hotspot's DNS (`<device name> · Device connected to the hotspot`) a few seconds after it appears.
 
 ## [0.8.1] - 2026-09-18
 
