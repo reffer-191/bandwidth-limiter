@@ -1,6 +1,6 @@
 [package]
 name = "bandwidth-limiter"
-version = "0.8.2"
+version = "0.8.3"
 description = "Bandwidth limiter and traffic monitor for Windows"
 authors = ["Fer"]
 edition = "2021"
@@ -28,7 +28,7 @@ window-vibrancy = "0.6"
 rusqlite = { version = "0.40", features = ["bundled"] }
 tauri-winrt-notification = "0.8"
 # Start Menu shortcut carrying the AppUserModelID (required for toasts).
-windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_Storage_EnhancedStorage", "Win32_Storage_FileSystem"] }
+windows = { version = "0.62", features = ["Win32_Foundation", "Win32_System_Com", "Win32_System_Com_StructuredStorage", "Win32_System_Variant", "Win32_UI_Shell", "Win32_UI_Shell_PropertiesSystem", "Win32_Storage_EnhancedStorage", "Win32_Storage_FileSystem", "Networking_Connectivity", "Networking_NetworkOperators", "Foundation_Collections"] }
 
 [dependencies.windows-sys]
 version = "0.59"

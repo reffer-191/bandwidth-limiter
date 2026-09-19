@@ -19,13 +19,13 @@ const emptyRule = (): Rule => ({
 
 type Listener = (t: Tick) => void;
 
-const APPS: Omit<AppRate, "dl" | "ul" | "totalDl" | "totalUl" | "lastSeen">[] = [
+const APPS: Omit<AppRate, "dl" | "ul" | "totalDl" | "totalUl" | "lastSeen" | "online">[] = [
   { id: 0, key: "unknown", name: "Desconocido", description: "Tráfico sin proceso identificado", exe: "", pids: [], isDevice: false },
   { id: 1, key: "c:\\program files\\google\\chrome\\application\\chrome.exe", name: "chrome.exe", description: "Google Chrome", exe: "C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe", pids: [4120, 4188], isDevice: false },
   { id: 2, key: "c:\\users\\fer\\appdata\\roaming\\spotify\\spotify.exe", name: "Spotify.exe", description: "Spotify", exe: "C:\\Users\\Fer\\AppData\\Roaming\\Spotify\\Spotify.exe", pids: [9921], isDevice: false },
   { id: 3, key: "c:\\windows\\system32\\svchost.exe", name: "svchost.exe", description: "Host Process for Windows Services", exe: "C:\\Windows\\System32\\svchost.exe", pids: [1204, 1388, 2210], isDevice: false },
   { id: 4, key: "system", name: "System", description: "Núcleo de Windows (SMB, actualizaciones, etc.)", exe: "", pids: [4], isDevice: false },
-  { id: 5, key: "hotspot:192.168.137.23", name: "192.168.137.23", description: "Dispositivo conectado al hotspot", exe: "", pids: [], isDevice: true },
+  { id: 5, key: "hotspot:24:29:34:9a:e2:bd", name: "Pixel-6a", description: "192.168.137.71", exe: "", pids: [], isDevice: true },
   { id: 6, key: "c:\\program files\\qbittorrent\\qbittorrent.exe", name: "qbittorrent.exe", description: "qBittorrent", exe: "C:\\Program Files\\qBittorrent\\qbittorrent.exe", pids: [], isDevice: false },
   ...[
     ["Discord.exe", "Discord"], ["steam.exe", "Steam"], ["Teams.exe", "Microsoft Teams"], ["OneDrive.exe", "Microsoft OneDrive"],
@@ -88,7 +88,7 @@ function makeTick(): Tick {
     tot.dl += r.dl;
     tot.ul += r.ul;
     state.totals.set(a.id, tot);
-    return { ...a, dl: r.dl, ul: r.ul, totalDl: tot.dl, totalUl: tot.ul, lastSeen: r.dl + r.ul > 0 ? Date.now() : Date.now() - 86_400_000 * (a.id + 1) };
+    return { ...a, online: a.isDevice ? a.id === 5 : a.pids.length > 0, dl: r.dl, ul: r.ul, totalDl: tot.dl, totalUl: tot.ul, lastSeen: r.dl + r.ul > 0 ? Date.now() : Date.now() - 86_400_000 * (a.id + 1) };
   });
   const sum = (f: (a: AppRate) => boolean) =>
     apps.filter(f).reduce((acc, a) => ({ dl: acc.dl + a.dl, ul: acc.ul + a.ul }), { dl: 0, ul: 0 });

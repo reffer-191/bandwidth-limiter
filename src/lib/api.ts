@@ -13,6 +13,8 @@ export interface AppRate {
   exe: string;
   pids: number[];
   isDevice: boolean;
+  /** running process (apps) / connected to the hotspot right now (devices) */
+  online: boolean;
   dl: number;
   ul: number;
   /** bytes in the last 30 days (persisted) */

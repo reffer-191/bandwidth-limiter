@@ -4,6 +4,12 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+## [0.8.3] - 2026-09-19
+
+### Changed
+- Hotspot devices are identified the way Windows does it: through the mobile-hotspot client list (MAC address, current address, name). A phone is one row — "Pixel-6a" — however many addresses DHCP handed it over the month; rows recorded earlier under an address are merged into the device when it reconnects, and the green dot means "connected to the hotspot right now", not "seen once". Without that list (hotspot off) devices fall back to their address and to "moved bytes in the last 30 s".
+- The *Active* filter uses the same notion for devices, so idle or disconnected phones no longer show up as active.
+
 ## [0.8.2] - 2026-09-19
 
 ### Fixed

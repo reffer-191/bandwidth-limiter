@@ -69,7 +69,7 @@ export function ActivityView({ filter, selected, onSelect }: {
     }
     const q = filter.trim().toLowerCase();
     if (q) list = list.filter((a) => appName(a, t).toLowerCase().includes(q) || appDescription(a, t).toLowerCase().includes(q) || a.exe.toLowerCase().includes(q));
-    if (!showIdle) list = list.filter((a) => a.dl + a.ul > 0 || a.pids.length > 0 || a.isDevice);
+    if (!showIdle) list = list.filter((a) => a.dl + a.ul > 0 || a.online);
     // Static ordering: by name, or by *accumulated* 30-day usage (never by
     // the live rate, which would reshuffle the rows every second).
     const byName = (a: AppRate, b: AppRate) => appName(a, t).localeCompare(appName(b, t), undefined, { sensitivity: "base" }) || a.key.localeCompare(b.key);
@@ -224,7 +224,7 @@ export function ActivityView({ filter, selected, onSelect }: {
                     >
                       <td>
                         <div className="app-cell">
-                          <span className={`online ${a.pids.length || a.isDevice ? "" : "off"}`} />
+                          <span className={`online ${a.online ? "" : "off"}`} />
                           <AppIcon appKey={a.key} hasExe={!!a.exe} isDevice={a.isDevice} />
                           <div className="app-name">
                             <span className="n">{appName(a, t)}</span>

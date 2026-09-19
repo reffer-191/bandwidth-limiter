@@ -16,7 +16,7 @@ export function appDescription(a: Pick<AppRate, "key" | "description" | "isDevic
   if (a.key === "unknown") return t("app.unknown.desc");
   if (a.key === "system") return t("app.system.desc");
   if (a.key === "hotspot:?") return t("app.hotspotOther.desc");
-  if (a.isDevice) return a.description ? `${a.description} · ${t("app.device.desc")}` : t("app.device.desc");
+  if (a.isDevice) return a.description && !a.description.startsWith("Dispositivo conectado") ? `${t("app.device.desc")} · ${a.description}` : t("app.device.desc");
   return a.description;
 }
 

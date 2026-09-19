@@ -8,6 +8,7 @@ pub mod packet;
 pub mod procinfo;
 pub mod shaper;
 pub mod stats;
+pub mod tether;
 pub mod usage;
 
 use std::collections::HashMap;
@@ -85,15 +86,43 @@ impl Apps {
     }
 
     /// Hotspot client row for an address, or the generic "forwarded
-    /// traffic" row when the address is not a hotspot client.
-    fn device(&mut self, ip: Option<&packet::Addr16>) -> (AppId, bool) {
-        let ip = ip.map(packet::addr_to_string).unwrap_or_else(|| "?".to_string());
-        let key = format!("hotspot:{ip}");
+    /// traffic" row when the address is not a hotspot client. Clients the
+    /// tethering API knows are keyed by MAC, so a phone keeps one row across
+    /// DHCP leases; the description carries its current address.
+    /// The third value is a (old key, new key) rename when a row that was
+    /// keyed by address is upgraded to its MAC (the usage store follows).
+    fn device(&mut self, ip: Option<&packet::Addr16>, tether: &tether::TetherMap) -> (AppId, bool, Option<(String, String)>) {
+        let Some(ip) = ip else {
+            let (id, created) = self.by_key.get("hotspot:?").map(|&id| (id, false)).unwrap_or_else(|| self.register("hotspot:?".into(), "?".into(), String::new(), String::new(), true));
+            return (id, created, None);
+        };
+        let ip = packet::addr_to_string(ip);
+        let ip_key = format!("hotspot:{ip}");
+        let (key, name) = match tether.ip_to_mac.get(&ip) {
+            Some(mac) => (format!("hotspot:{mac}"), tether.mac_to_name.get(mac).cloned().unwrap_or_else(|| mac.clone())),
+            None => (ip_key.clone(), ip.clone()),
+        };
         if let Some(&id) = self.by_key.get(&key) {
-            return (id, false);
+            let m = &mut self.list[id as usize];
+            if m.description != ip {
+                m.description = ip;
+            }
+            return (id, false, None);
         }
-        // Description stays empty until reverse DNS gives the device a name.
-        self.register(key, ip, String::new(), String::new(), true)
+        // Known by MAC now, but seen earlier under its address: re-key the
+        // existing row so its history and rules follow the device.
+        if key != ip_key {
+            if let Some(id) = self.by_key.remove(&ip_key) {
+                self.by_key.insert(key.clone(), id);
+                let m = &mut self.list[id as usize];
+                m.key = key.clone();
+                m.name = name;
+                m.description = ip;
+                return (id, false, Some((ip_key, key)));
+            }
+        }
+        let (id, created) = self.register(key, name, ip, String::new(), true);
+        (id, created, None)
     }
 
     fn prune_dead(&mut self) {
@@ -144,6 +173,8 @@ pub struct AppRate {
     pub exe: String,
     pub pids: Vec<u32>,
     pub is_device: bool,
+    /// Running process (apps) / connected to the hotspot right now (devices).
+    pub online: bool,
     pub dl: f64,
     pub ul: f64,
     /// Bytes over the last 30 days (persisted across restarts).
@@ -196,6 +227,12 @@ pub struct State {
     new_apps: Mutex<Vec<AppId>>,
     /// Bytes to move from "Unknown" to an app in the usage store (ticker).
     reattributed: Mutex<Vec<(AppId, u64, u64)>>,
+    /// Hotspot clients as Windows reports them (refreshed every 5 s).
+    pub tether: RwLock<tether::TetherMap>,
+    /// Addresses already sent to reverse DNS (once per session).
+    dns_tried: Mutex<std::collections::HashSet<String>>,
+    /// Device rows re-keyed from address to MAC; the usage store follows.
+    renames: Mutex<Vec<(String, String)>>,
     /// Charge IP/TCP headers to the buckets (config.count_headers).
     count_headers: AtomicBool,
     /// network, forward, flow, socket
@@ -255,7 +292,9 @@ impl Engine {
         let mut known: Vec<(&String, &usage::AppUsage)> = usage.apps.iter().collect();
         known.sort_by(|a, b| a.1.name.to_lowercase().cmp(&b.1.name.to_lowercase()));
         for (key, u) in known {
-            apps.register(key.clone(), u.name.clone(), u.description.clone(), u.exe.clone(), u.is_device);
+            // Device rows from older versions carried a fixed Spanish label.
+            let description = if u.is_device && u.description.starts_with("Dispositivo conectado") { String::new() } else { u.description.clone() };
+            apps.register(key.clone(), u.name.clone(), description, u.exe.clone(), u.is_device);
         }
 
         let state = Arc::new(State {
@@ -278,6 +317,9 @@ impl Engine {
             dns_dirty: AtomicBool::new(true),
             new_apps: Mutex::new(Vec::new()),
             reattributed: Mutex::new(Vec::new()),
+            tether: RwLock::new(tether::TetherMap::default()),
+            dns_tried: Mutex::new(std::collections::HashSet::new()),
+            renames: Mutex::new(Vec::new()),
             count_headers: AtomicBool::new(config.count_headers),
             handles: std::array::from_fn(|_| AtomicPtr::new(std::ptr::null_mut())),
             open_gen: AtomicU32::new(0),
@@ -534,7 +576,12 @@ impl State {
         // whole packet when the user asked to count headers.
         let charge = if self.count_headers.load(Ordering::Relaxed) { len } else { p.payload_len(len) };
         let (app, created) = if forward {
-            self.apps.lock().device(if hotspot_client { Some(&local) } else { None })
+            let tether = self.tether.read();
+            let (id, created, rename) = self.apps.lock().device(if hotspot_client { Some(&local) } else { None }, &tether);
+            if let Some(r) = rename {
+                self.renames.lock().push(r);
+            }
+            (id, created)
         } else {
             let key = FlowKey { protocol: p.protocol, local, local_port, remote, remote_port };
             let (pid, pending) = {
@@ -936,6 +983,9 @@ fn ticker_loop(state: Arc<State>, app: AppHandle) {
                     }
                 }
             }
+            for (from, to) in std::mem::take(&mut *state.renames.lock()) {
+                usage.rename(&from, &to);
+            }
             // Bytes first booked as "Unknown" whose owner showed up.
             let moved: Vec<(AppId, u64, u64)> = std::mem::take(&mut *state.reattributed.lock());
             for (id, dl, ul) in moved {
@@ -1055,6 +1105,7 @@ fn build_tick(state: &State, sample: &Sample, per_app: &HashMap<AppId, (Rate, By
     };
     let states = state.applied.lock().1.clone();
     let metered = state.adapters.read().metered;
+    let tether = state.tether.read();
     let list = apps
         .list
         .iter()
@@ -1069,6 +1120,7 @@ fn build_tick(state: &State, sample: &Sample, per_app: &HashMap<AppId, (Rate, By
                 exe: m.exe.clone(),
                 pids: m.pids.clone(),
                 is_device: m.is_device,
+                online: if m.is_device { online_device(&tether, &m.key, usage.last_seen(&m.key), now) } else { !m.pids.is_empty() },
                 dl: r.dl,
                 ul: r.ul,
                 total_dl,
@@ -1096,26 +1148,74 @@ fn build_tick(state: &State, sample: &Sample, per_app: &HashMap<AppId, (Rate, By
 /// "Galaxy-S23 · 192.168.137.71" instead of a bare address (the ICS DNS
 /// proxy knows the names the phones sent with their DHCP request).
 fn resolve_device_names(state: &Arc<State>) {
-    let targets: Vec<(AppId, String)> = {
+    // Names Windows already knows (tethering client list).
+    let (known, from_tether): (Vec<(AppId, String)>, Vec<(AppId, String)>) = {
         let apps = state.apps.lock();
-        apps.list
-            .iter()
-            .filter(|m| m.is_device && m.description.is_empty() && m.name != "?" && !m.pids.contains(&u32::MAX))
-            .map(|m| (m.id, m.name.clone()))
-            .collect()
-    };
-    for (id, ip) in targets {
-        let Ok(addr) = ip.parse::<std::net::IpAddr>() else { continue };
-        let name = adapters::reverse_lookup(addr);
-        let mut apps = state.apps.lock();
-        if let Some(m) = apps.list.get_mut(id as usize) {
-            match name {
-                Some(n) if n != ip => m.description = n,
-                // Mark as tried (pids are meaningless for devices) so we do
-                // not hammer the resolver every 5 minutes.
-                _ => m.pids.push(u32::MAX),
+        let tether = state.tether.read();
+        let mut unnamed = Vec::new();
+        let mut named = Vec::new();
+        for m in apps.list.iter().filter(|m| m.is_device && m.name != "?") {
+            let id = &m.key["hotspot:".len()..];
+            if let Some(n) = tether.mac_to_name.get(id) {
+                if &m.name != n {
+                    named.push((m.id, n.clone()));
+                }
+            } else if m.name == id {
+                // Still labelled by its MAC/IP: try reverse DNS on its address.
+                let ip = if m.description.is_empty() { id.to_string() } else { m.description.clone() };
+                unnamed.push((m.id, ip));
             }
         }
+        (unnamed, named)
+    };
+    {
+        let mut apps = state.apps.lock();
+        for (id, n) in from_tether {
+            if let Some(m) = apps.list.get_mut(id as usize) {
+                m.name = n;
+            }
+        }
+    }
+    for (id, ip) in known {
+        if !state.dns_tried.lock().insert(ip.clone()) {
+            continue;
+        }
+        let Ok(addr) = ip.parse::<std::net::IpAddr>() else { continue };
+        if let Some(n) = adapters::reverse_lookup(addr) {
+            if n != ip {
+                if let Some(m) = state.apps.lock().list.get_mut(id as usize) {
+                    m.name = n;
+                }
+            }
+        }
+    }
+}
+
+/// A device is online when Windows lists it as a hotspot client; without
+/// the tethering API, when it moved bytes in the last 30 s.
+fn online_device(tether: &tether::TetherMap, key: &str, last_seen: u64, now: u64) -> bool {
+    let id = &key["hotspot:".len()..];
+    if tether.available {
+        tether.is_online(id)
+    } else {
+        now.saturating_sub(last_seen) < 30_000
+    }
+}
+
+/// Refreshes the hotspot client list from Windows.
+fn refresh_tether(state: &Arc<State>) {
+    let (clients, available) = match tether::query() {
+        Some(c) => (c, true),
+        None => (Vec::new(), false),
+    };
+    let map = tether::TetherMap::from_clients(clients, available);
+    let changed = {
+        let cur = state.tether.read();
+        cur.available != map.available || cur.ip_to_mac != map.ip_to_mac || cur.mac_to_name != map.mac_to_name
+    };
+    if changed {
+        log::info!("hotspot: {} client(s){}", map.clients.len(), if map.available { "" } else { " (tethering API unavailable)" });
+        *state.tether.write() = map;
     }
 }
 
@@ -1124,14 +1224,19 @@ fn resolve_device_names(state: &Arc<State>) {
 fn resolver_loop(state: Arc<State>) {
     use std::net::ToSocketAddrs;
     let mut last = Instant::now() - Duration::from_secs(3600);
+    let mut n: u64 = 0;
     while state.running.load(Ordering::Relaxed) {
         thread::sleep(Duration::from_millis(1000));
+        n += 1;
+        if n % 5 == 1 {
+            refresh_tether(&state);
+            resolve_device_names(&state);
+        }
         let due = last.elapsed() > Duration::from_secs(300);
         if !due && !state.dns_dirty.swap(false, Ordering::SeqCst) {
             continue;
         }
         last = Instant::now();
-        resolve_device_names(&state);
         let hosts: Vec<String> = state
             .config
             .read()

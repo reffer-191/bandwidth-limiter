@@ -346,6 +346,51 @@ impl UsageStore {
         self.add(&to_meta.key, to_meta, mdl, mul, now_ms);
     }
 
+    /// Merges the history of `from` into `to` (device re-keyed from its
+    /// address to its MAC). Rules in config.json are keyed too, but those
+    /// are the user's and stay as they are.
+    pub fn rename(&mut self, from: &str, to: &str) {
+        let Some(old) = self.apps.remove(from) else { return };
+        let entry = self.apps.entry(to.to_string()).or_insert_with(|| AppUsage { first_seen: old.first_seen, ..Default::default() });
+        entry.first_seen = entry.first_seen.min(old.first_seen).max(1);
+        entry.last_seen = entry.last_seen.max(old.last_seen);
+        if entry.name.is_empty() {
+            entry.name = old.name.clone();
+        }
+        entry.is_device = true;
+        let mut hours: HashMap<u32, (u64, u64)> = HashMap::new();
+        for h in entry.hours.iter().chain(old.hours.iter()) {
+            let e = hours.entry(h.hour).or_default();
+            e.0 += h.dl;
+            e.1 += h.ul;
+        }
+        let mut merged: Vec<HourUsage> = hours.into_iter().map(|(hour, (dl, ul))| HourUsage { hour, dl, ul }).collect();
+        merged.sort_by_key(|h| h.hour);
+        entry.hours = merged.clone();
+        // Database: drop both keys and re-insert the merged buckets through
+        // the normal delta path.
+        if let Some(db) = self.db.as_ref() {
+            for r in [
+                db.execute("DELETE FROM usage WHERE key = ?1 OR key = ?2", params![from, to]),
+                db.execute("DELETE FROM apps WHERE key = ?1", params![from]),
+            ] {
+                if let Err(e) = r {
+                    log::warn!("usage rename: {e}");
+                }
+            }
+        }
+        self.pending.retain(|(k, _), _| k != from && k != to);
+        self.corrections.retain(|(k, _, _, _)| k != from && k != to);
+        for h in merged {
+            self.pending.insert((to.to_string(), h.hour), (h.dl, h.ul));
+        }
+        self.meta_dirty.retain(|k| k != from);
+        if !self.meta_dirty.iter().any(|k| k == to) {
+            self.meta_dirty.push(to.to_string());
+        }
+        log::info!("usage: {from} → {to}");
+    }
+
     /// Drops hour buckets and apps outside the retention window.
     pub fn prune(&mut self, now_ms: u64) {
         let cutoff_hour = hour_of(now_ms).saturating_sub(RETENTION_DAYS * 24);
@@ -527,5 +572,22 @@ mod tests {
         let only_b = s.stats(from, from + DAY_MS, HOUR_MS, Some("b"));
         assert_eq!(only_b.buckets[3].dl, 5);
         assert_eq!(only_b.apps.len(), 2, "app totals are not filtered");
+    }
+
+    #[test]
+    fn rename_merges_history() {
+        let mut s = UsageStore::in_memory();
+        let now = 300 * DAY_MS;
+        s.add("hotspot:192.168.137.71", &meta("192.168.137.71"), 100, 10, now);
+        s.add("hotspot:24:29:34:9a:e2:bd", &meta("Pixel"), 5, 5, now);
+        s.add("hotspot:192.168.137.71", &meta("192.168.137.71"), 50, 5, now - HOUR_MS);
+        s.rename("hotspot:192.168.137.71", "hotspot:24:29:34:9a:e2:bd");
+        assert!(s.apps.get("hotspot:192.168.137.71").is_none());
+        assert_eq!(s.sum_since("hotspot:24:29:34:9a:e2:bd", now - DAY_MS), (155, 20));
+        s.save().unwrap();
+        let mut back = UsageStore { db: s.db.take(), ..Default::default() };
+        back.read_all().unwrap();
+        assert!(back.apps.get("hotspot:192.168.137.71").is_none());
+        assert_eq!(back.sum_since("hotspot:24:29:34:9a:e2:bd", now - DAY_MS), (155, 20));
     }
 }

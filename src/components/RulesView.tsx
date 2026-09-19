@@ -82,7 +82,7 @@ export function RulesView({ onSelect }: { onSelect: (key: string) => void }) {
                 <div className="titles">
                   <div className="n" style={{ display: "flex", alignItems: "center", gap: 8 }}>
                     {appName(meta, t)}
-                    <span className={`online ${live && (live.pids.length || live.isDevice) ? "" : "off"}`} title={live?.pids.length ? t("rules.running") : t("rules.notRunning")} />
+                    <span className={`online ${live?.online ? "" : "off"}`} title={live?.online ? t("rules.running") : t("rules.notRunning")} />
                   </div>
                   <div className="d">{appDescription(meta, t)}</div>
                   {r.exe && <div className="p">{r.exe}</div>}
